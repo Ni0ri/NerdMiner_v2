@@ -118,7 +118,8 @@ Describe 'Aufruf externer Programme (ccusage)' {
     It 'stderr-Hinweise (npm notice) brechen auch mit ErrorActionPreference Stop nicht ab' {
         $ErrorActionPreference = 'Stop'
         $out = Invoke-CcusageCommand -Command $script:Shell -Arguments @('-NoProfile', '-Command',
-            "[Console]::Error.WriteLine('npm notice'); [Console]::Out.WriteLine('{""daily"":[]}')")
+            "[Console]::Error.WriteLine('npm notice'); [Console]::Out.WriteLine('{' + [char]34 + 'daily' + [char]34 + ':[]}')")
+        # [char]34 statt Anführungszeichen: PS 5.1 entfernt innere " beim Aufruf externer Programme
         $out | Should -Be '{"daily":[]}'
     }
     It 'Exitcode ungleich 0 wird mit stderr gemeldet' {
