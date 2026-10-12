@@ -79,7 +79,7 @@ Describe 'Install-Task Ablauf (nur Windows)' -Skip:(-not $IsWindows -and $PSVers
         $bytes[0] | Should -Be ([byte][char]'{')
         $s = Get-Content $settings -Raw | ConvertFrom-Json
         $s.model | Should -Be 'opus'
-        $s.statusLine.command | Should -Match 'Write-ClaudeStatusLine\.ps1$'
+        $s.statusLine.command | Should -Match 'Write-ClaudeStatusLine\.ps1 -CachePath .+/ratelimits\.json -LogPath '
         @(Get-ChildItem (Split-Path $settings) -Filter 'settings.json.bak-*').Count | Should -Be 1
     }
 }
