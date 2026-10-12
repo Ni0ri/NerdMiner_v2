@@ -8,8 +8,8 @@
 #include <string.h>
 
 // Static documents: no heap allocation per request and no large stack frames.
-static StaticJsonDocument<512> s_filter;
-static StaticJsonDocument<1024> s_doc;
+static StaticJsonDocument<768> s_filter;
+static StaticJsonDocument<1536> s_doc;
 
 void claudeUsageClear(ClaudeUsage &u)
 {
@@ -17,6 +17,17 @@ void claudeUsageClear(ClaudeUsage &u)
   u.valid = false;
   u.todayIn = u.todayOut = u.monthIn = u.monthOut = CLAUDE_MISSING_TOKENS;
   u.todayCost = u.monthCost = u.budget = NAN;
+  u.sessionPct = u.weekPct = NAN;
+  u.limitsAgeMin = -1;
+}
+
+static float readPercent(JsonVariantConst v)
+{
+  if (!v.is<double>()) return NAN;
+  double d = v.as<double>();
+  if (isnan(d) || d < 0) return NAN;
+  if (d > 999) d = 999;
+  return (float)d;
 }
 
 static int64_t readTokens(JsonVariantConst v)
@@ -67,6 +78,12 @@ bool claudeUsageParse(const char *json, size_t len, ClaudeUsage &out)
       s_filter[period]["output_tokens"] = true;
       s_filter[period]["cost_usd"] = true;
     }
+    for (const char *window : {"session", "week"})
+    {
+      s_filter["limits"][window]["used_pct"] = true;
+      s_filter["limits"][window]["resets"] = true;
+    }
+    s_filter["limits"]["age_min"] = true;
   }
 
   s_doc.clear();
@@ -81,6 +98,13 @@ bool claudeUsageParse(const char *json, size_t len, ClaudeUsage &out)
   readPeriod(root["today"], u.todayIn, u.todayOut, u.todayCost);
   readPeriod(root["month"], u.monthIn, u.monthOut, u.monthCost);
   u.budget = readCost(root["budget_usd"]);
+  JsonVariantConst limits = root["limits"];
+  u.sessionPct = readPercent(limits["session"]["used_pct"]);
+  readString(limits["session"]["resets"], u.sessionResets, sizeof(u.sessionResets));
+  u.weekPct = readPercent(limits["week"]["used_pct"]);
+  readString(limits["week"]["resets"], u.weekResets, sizeof(u.weekResets));
+  if (limits["age_min"].is<long>() && limits["age_min"].as<long>() >= 0)
+    u.limitsAgeMin = (int32_t)limits["age_min"].as<long>();
   u.valid = true;
   out = u;
   return true;
@@ -116,6 +140,15 @@ size_t claudeUsageToJson(const ClaudeUsage &u, long ageSeconds, char *buf, size_
   writeTokens(month, "output_tokens", u.monthOut);
   writeCost(month, "cost_usd", u.monthCost);
   writeCost(root, "budget_usd", u.budget);
+  JsonObject limits = root.createNestedObject("limits");
+  JsonObject session = limits.createNestedObject("session");
+  writeCost(session, "used_pct", u.sessionPct);
+  session["resets"] = (const char *)u.sessionResets;
+  JsonObject week = limits.createNestedObject("week");
+  writeCost(week, "used_pct", u.weekPct);
+  week["resets"] = (const char *)u.weekResets;
+  if (u.limitsAgeMin < 0) limits["age_min"] = nullptr;
+  else limits["age_min"] = u.limitsAgeMin;
   if (s_doc.overflowed()) return 0;
   size_t n = serializeJson(s_doc, buf, bufsiz);
   return (n + 1 >= bufsiz) ? 0 : n;

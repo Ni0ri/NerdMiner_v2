@@ -106,6 +106,34 @@ int main()
   ok = claudeUsageParse(longSource, strlen(longSource), u);
   check(ok && strlen(u.source) == sizeof(u.source) - 1, "Zu langer Text wird gekuerzt");
 
+  const char *limits = "{\"limits\":{\"session\":{\"used_pct\":6,\"resets\":\"19:10\"},"
+                       "\"week\":{\"used_pct\":42.4,\"resets\":\"Fr 00:00\"},\"age_min\":3}}";
+  ok = claudeUsageParse(limits, strlen(limits), u);
+  check(ok && fabsf(u.sessionPct - 6.0f) < 0.01f && strcmp(u.sessionResets, "19:10") == 0 &&
+            fabsf(u.weekPct - 42.4f) < 0.01f && strcmp(u.weekResets, "Fr 00:00") == 0 && u.limitsAgeMin == 3,
+        "Abo-Limits werden gelesen");
+  ok = claudeUsageParse(full, strlen(full), u);
+  check(ok && isnan(u.sessionPct) && isnan(u.weekPct) && u.sessionResets[0] == '\0' && u.limitsAgeMin == -1,
+        "Ohne Abo-Limits bleiben sie leer");
+  const char *badLimits = "{\"limits\":{\"session\":{\"used_pct\":\"viel\"},\"week\":{\"used_pct\":-5},\"age_min\":-2}}";
+  ok = claudeUsageParse(badLimits, strlen(badLimits), u);
+  check(ok && isnan(u.sessionPct) && isnan(u.weekPct) && u.limitsAgeMin == -1, "Ungueltige Abo-Limits gelten als fehlend");
+
+  // Groesstes realistisches Payload der Bridge (mit allen Feldern) muss passen
+  const char *maxi = "{\"source\":\"ccusage\",\"updated\":\"2026-10-12T16:49:09+02:00\","
+                     "\"today\":{\"input_tokens\":9999999999,\"output_tokens\":9999999999,\"cost_usd\":99999.99},"
+                     "\"month\":{\"input_tokens\":9999999999,\"output_tokens\":9999999999,\"cost_usd\":99999.99},"
+                     "\"budget_usd\":100000.0,\"limits\":{\"session\":{\"used_pct\":100,\"resets\":\"Mo 23:59\"},"
+                     "\"week\":{\"used_pct\":100,\"resets\":\"Mo 23:59\"},\"age_min\":99999}}";
+  ok = claudeUsageParse(maxi, strlen(maxi), u);
+  check(ok && u.monthIn == 9999999999LL && fabsf(u.weekPct - 100.0f) < 0.01f && u.limitsAgeMin == 99999, "Maximales Payload passt");
+  {
+    char big[768];
+    size_t n2 = claudeUsageToJson(u, 123456, big, sizeof(big));
+    printf("       GET maximal (%u Bytes): %s\n", (unsigned)n2, big);
+    check(n2 > 0 && strstr(big, "\"week\":{\"used_pct\":100,\"resets\":\"Mo 23:59\"}"), "GET-JSON mit Abo-Limits passt in den Puffer");
+  }
+
   char out[512];
   claudeUsageParse(full, strlen(full), u);
   size_t n = claudeUsageToJson(u, 42, out, sizeof(out));

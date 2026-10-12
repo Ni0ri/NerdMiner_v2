@@ -30,10 +30,10 @@ Die Werte „offen“ lassen sich nur auf der echten Hardware messen und sind na
 | Build | RAM statisch | Flash |
 |---|---|---|
 | ESP32-2432S028R (2,8", unverändertes Upstream-Board, zum Vergleich) | 55.016 B (16,8 %) | 2.149.053 B (68,3 %) |
-| ESP32-32E-35 mit Claude-Feature | 57.392 B (17,5 %) | 2.134.001 B (67,8 %) |
+| ESP32-32E-35 mit Claude-Feature (inkl. Abo-Limits) | 58.464 B (17,8 %) | 2.135.741 B (67,9 %) |
 
 Zusätzlich zur Laufzeit:
 - Claude-Screen: **keine Sprites**, nur eingebaute Fonts mit Hintergrundfarbe → keine Heap-Allokation beim Zeichnen.
-- JSON: zwei statische ArduinoJson-Dokumente (512 B + 1 KB, im RAM-Wert oben enthalten), keine Allokation pro Request
+- JSON: zwei statische ArduinoJson-Dokumente (768 B + 1,5 KB, im RAM-Wert oben enthalten), keine Allokation pro Request
   außer dem Request-Body des Arduino-`WebServer` (max. 1 KB akzeptiert).
 - Webserver läuft im Arduino-`loop()`-Task, nicht in den Mining-Tasks; kein HTTPS, kein `delay()`.

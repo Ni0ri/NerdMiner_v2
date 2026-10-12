@@ -90,7 +90,7 @@ static void handleGet(void)
   ClaudeUsage u;
   claudeGetSnapshot(u);
   long age = u.valid ? (long)((millis() - u.receivedMs) / 1000UL) : -1;
-  static char buf[512];
+  static char buf[768];
   if (claudeUsageToJson(u, age, buf, sizeof(buf)) == 0)
   {
     sendJson(500, "{\"ok\":false,\"error\":\"buffer\"}");

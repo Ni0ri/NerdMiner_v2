@@ -24,6 +24,12 @@ struct ClaudeUsage
   int64_t monthOut;
   float monthCost;
   float budget;
+  // claude.ai plan limits (Pro/Max) from the Claude Code status line; NAN / "" / -1 = missing
+  float sessionPct;        // 5-hour window, 0..100
+  char sessionResets[16];  // already formatted by the bridge, e.g. "19:10"
+  float weekPct;           // 7-day window, 0..100
+  char weekResets[16];     // e.g. "Fr 00:00"
+  int32_t limitsAgeMin;    // age of the limit values in minutes, -1 = unknown
 };
 
 // Resets all fields to "missing" and valid = false.
