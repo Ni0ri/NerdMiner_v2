@@ -34,6 +34,10 @@
 .PARAMETER ClaudeSettingsPath
     Pfad der Claude-Code-Benutzereinstellungen. Standard: %USERPROFILE%\.claude\settings.json
 
+.PARAMETER NoHeadless
+    Startet die Aufgabe direkt mit powershell.exe statt über "conhost.exe --headless" (nur für Windows-Versionen
+    vor 10 1809 nötig; dann blitzt alle 5 min kurz ein Konsolenfenster auf).
+
 .PARAMETER Uninstall
     Entfernt die geplante Aufgabe.
 
@@ -60,9 +64,10 @@
 
 .NOTES
     Autor:   Artur Warkentin
-    Version: 1.1.0
+    Version: 1.2.0
     Datum:   2026-10-12
     Changelog:
+      1.2.0  2026-10-12  Aufgabe startet über "conhost.exe --headless" (kein aufblitzendes Fenster), -NoHeadless
       1.1.0  2026-10-12  Write-ClaudeStatusLine.ps1 mitkopieren, Schalter -ConfigureStatusLine
       1.0.0  2026-10-12  Erstversion
 #>
@@ -72,6 +77,7 @@ param(
     [string]$TaskName = 'ClaudeMinerBridge',
     [ValidateRange(1, 60)][int]$IntervalMinutes = 5,
     [switch]$ConfigureStatusLine,
+    [switch]$NoHeadless,
     [string]$ClaudeSettingsPath = (Join-Path (Join-Path $HOME '.claude') 'settings.json'),
     [switch]$Uninstall,
     [string]$LogPath = $PSScriptRoot,
@@ -100,6 +106,16 @@ function Get-TaskArgument {
     <# Argumente für powershell.exe: ausgeblendet, ohne Profil, Skript per -File. #>
     param([Parameter(Mandatory)][string]$ScriptPath)
     return '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ScriptPath
+}
+
+function Get-TaskCommand {
+    <# Programm und Argumente der geplanten Aufgabe. -WindowStyle Hidden allein lässt kurz ein Konsolenfenster
+       aufblitzen; "conhost.exe --headless" (ab Windows 10 1809) startet PowerShell ganz ohne Fenster,
+       auch für Kindprozesse wie npx/node. #>
+    param([Parameter(Mandatory)][string]$ScriptPath, [switch]$NoHeadless)
+    $psArgs = Get-TaskArgument -ScriptPath $ScriptPath
+    if ($NoHeadless) { return [pscustomobject]@{ Execute = 'powershell.exe'; Argument = $psArgs } }
+    return [pscustomobject]@{ Execute = 'conhost.exe'; Argument = '--headless powershell.exe ' + $psArgs }
 }
 
 function Get-InstallPlan {
@@ -156,6 +172,8 @@ function Invoke-SelfTest {
         @{ Name = 'Statuszeile wird ergänzt, andere Einstellungen bleiben'; Ok = ($add.Action -eq 'add' -and $add.Settings.model -eq 'opus' -and $add.Settings.statusLine.command -eq $cmd) }
         @{ Name = 'Gleiche Statuszeile wird erkannt'; Ok = ($same.Action -eq 'same') }
         @{ Name = 'Fremde Statuszeile wird nicht überschrieben'; Ok = ($conflict.Action -eq 'conflict' -and $conflict.Settings.statusLine.command -eq 'x') }
+        @{ Name = 'Aufgabe startet über conhost --headless'; Ok = ((Get-TaskCommand -ScriptPath 'C:\x.ps1').Execute -eq 'conhost.exe' -and (Get-TaskCommand -ScriptPath 'C:\x.ps1').Argument -like '--headless powershell.exe -NoProfile *-File "C:\x.ps1"') }
+        @{ Name = '-NoHeadless startet powershell.exe direkt'; Ok = ((Get-TaskCommand -ScriptPath 'C:\x.ps1' -NoHeadless).Execute -eq 'powershell.exe') }
         @{ Name = 'Argumente ausgeblendet und ohne Profil'; Ok = ($a -match '-WindowStyle Hidden' -and $a -match '-NoProfile' -and $a -match '-File "C:\\Tools\\ClaudeMinerBridge\\ClaudeMinerBridge\.ps1"') }
         @{ Name = 'Neuinstallation legt config.json an'; Ok = ($p1.Count -eq 4 -and $p1[3].Target -match 'config\.json$') }
         @{ Name = 'Bestehende config.json bleibt'; Ok = ($p2.Count -eq 3 -and -not ($p2.Target -match '[\\/]config\.json$')) }
@@ -207,7 +225,8 @@ try {
         if ($configExists) { Write-Log 'config.json existiert bereits und wurde nicht verändert.' }
 
         $scriptPath = Join-Path $InstallPath 'ClaudeMinerBridge.ps1'
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument (Get-TaskArgument -ScriptPath $scriptPath) -WorkingDirectory $InstallPath
+        $taskCmd = Get-TaskCommand -ScriptPath $scriptPath -NoHeadless:$NoHeadless
+        $action = New-ScheduledTaskAction -Execute $taskCmd.Execute -Argument $taskCmd.Argument -WorkingDirectory $InstallPath
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
         $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries `
             -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 4)

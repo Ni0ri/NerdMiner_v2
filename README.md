@@ -220,6 +220,9 @@ inzwischen zurückgesetzt, zeigt es 0 %.
 
 Aufgabe entfernen: `.\Install-Task.ps1 -Uninstall`.
 
+Die Aufgabe startet PowerShell über `conhost.exe --headless`, damit alle 5 Minuten **kein Konsolenfenster
+aufblitzt** (ab Windows 10 1809). Auf älteren Windows-Versionen `.\Install-Task.ps1 -NoHeadless` verwenden.
+
 ## 7. Abnahme-Checkliste
 
 - [ ] Miner läuft 24 h ohne Neustart, Hashrate höchstens ~5 % unter Ausgangswert → [docs/Hashrate-und-Heap.md](docs/Hashrate-und-Heap.md)

@@ -10,6 +10,12 @@ Describe 'Install-Task Hilfsfunktionen' {
         $a | Should -Match '-NoProfile'
         $a | Should -Match '-File "C:\\Tools\\ClaudeMinerBridge\\ClaudeMinerBridge\.ps1"$'
     }
+    It 'Aufgabe startet ohne sichtbares Fenster über conhost --headless' {
+        $c = Get-TaskCommand -ScriptPath 'C:\Tools\ClaudeMinerBridge\ClaudeMinerBridge.ps1'
+        $c.Execute | Should -Be 'conhost.exe'
+        $c.Argument | Should -Be ('--headless powershell.exe ' + (Get-TaskArgument -ScriptPath 'C:\Tools\ClaudeMinerBridge\ClaudeMinerBridge.ps1'))
+        (Get-TaskCommand -ScriptPath 'C:\x.ps1' -NoHeadless).Execute | Should -Be 'powershell.exe'
+    }
     It 'bestehende config.json wird nicht überschrieben' {
         $plan = @(Get-InstallPlan -SourceFolder 'a' -TargetFolder 'b' -ConfigExists $true)
         @($plan | Where-Object { $_.Target -match '[\\/]config\.json$' }).Count | Should -Be 0
