@@ -23,7 +23,8 @@
 
     Einrichtung (macht Install-Task.ps1 -ConfigureStatusLine), in %USERPROFILE%\.claude\settings.json:
       "statusLine": { "type": "command",
-        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/Tools/ClaudeMinerBridge/Write-ClaudeStatusLine.ps1" }
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/Tools/ClaudeMinerBridge/Write-ClaudeStatusLine.ps1
+          -CachePath C:/Tools/ClaudeMinerBridge/ratelimits.json -LogPath C:/Tools/ClaudeMinerBridge" }
 
 .PARAMETER CachePath
     Datei für die zuletzt gesehenen Limits. Standard: ratelimits.json neben dem Skript.
@@ -50,20 +51,33 @@
 
 .NOTES
     Autor:   Artur Warkentin
-    Version: 1.0.0
+    Version: 1.0.1
     Datum:   2026-10-12
     Changelog:
+      1.0.1  2026-10-12  Skriptordner auch bei Aufruf mit Schrägstrichen unter PS 5.1 (leeres $PSScriptRoot)
       1.0.0  2026-10-12  Erstversion
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [string]$CachePath = (Join-Path $PSScriptRoot 'ratelimits.json'),
+    [string]$CachePath,
     [string]$InputJson,
-    [string]$LogPath = $PSScriptRoot,
+    [string]$LogPath,
     [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Ordner des Skripts selbst bestimmen: Windows PowerShell 5.1 liefert $PSScriptRoot in Parameter-Standardwerten
+# leer, wenn das Skript mit Schrägstrichen aufgerufen wird (C:/Tools/...), wie es Claude Code für die Statuszeile tut.
+$script:ScriptDir = $PSScriptRoot
+foreach ($candidate in @($PSCommandPath, $MyInvocation.MyCommand.Path, $MyInvocation.MyCommand.Definition)) {
+    if (-not $script:ScriptDir -and $candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        $script:ScriptDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($candidate))
+    }
+}
+if (-not $script:ScriptDir) { $script:ScriptDir = (Get-Location).Path }
+if (-not $CachePath) { $CachePath = Join-Path $script:ScriptDir 'ratelimits.json' }
+if (-not $LogPath) { $LogPath = $script:ScriptDir }
 $script:LogFile = Join-Path $LogPath ("Log_{0:yyyy-MM-dd}.log" -f (Get-Date))
 
 function Write-Log {

@@ -30,7 +30,7 @@ Describe 'Install-Task Hilfsfunktionen' {
 Describe 'Install-Task Statuszeile' {
     It 'ergänzt die Statuszeile und lässt andere Einstellungen stehen' {
         $cmd = Get-StatusLineCommand -ScriptPath 'C:\Tools\ClaudeMinerBridge\Write-ClaudeStatusLine.ps1'
-        $cmd | Should -Be 'powershell -NoProfile -ExecutionPolicy Bypass -File C:/Tools/ClaudeMinerBridge/Write-ClaudeStatusLine.ps1'
+        $cmd | Should -Be 'powershell -NoProfile -ExecutionPolicy Bypass -File C:/Tools/ClaudeMinerBridge/Write-ClaudeStatusLine.ps1 -CachePath C:/Tools/ClaudeMinerBridge/ratelimits.json -LogPath C:/Tools/ClaudeMinerBridge'
         $r = Get-StatusLineChange -Settings ([pscustomobject]@{ model = 'opus'; permissions = [pscustomobject]@{ allow = @('Bash(ls)') } }) -Command $cmd
         $r.Action | Should -Be 'add'
         $r.Settings.model | Should -Be 'opus'
@@ -41,6 +41,14 @@ Describe 'Install-Task Statuszeile' {
         $r = Get-StatusLineChange -Settings ([pscustomobject]@{ statusLine = [pscustomobject]@{ type = 'command'; command = 'mein.sh' } }) -Command 'x'
         $r.Action | Should -Be 'conflict'
         $r.Current | Should -Be 'mein.sh'
+    }
+    It 'aktualisiert einen eigenen älteren Eintrag, andere Felder bleiben' {
+        $old = [pscustomobject]@{ theme = 'dark'; statusLine = [pscustomobject]@{ type = 'command'; command = 'powershell -NoProfile -File C:/Tools/ClaudeMinerBridge/Write-ClaudeStatusLine.ps1' } }
+        $r = Get-StatusLineChange -Settings $old -Command 'neu'
+        $r.Action | Should -Be 'update'
+        $r.Settings.statusLine.command | Should -Be 'neu'
+        $r.Settings.statusLine.type | Should -Be 'command'
+        $r.Settings.theme | Should -Be 'dark'
     }
     It 'ohne settings.json wird eine neue angelegt' {
         (Get-StatusLineChange -Settings $null -Command 'x').Action | Should -Be 'add'

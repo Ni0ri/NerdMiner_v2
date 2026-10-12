@@ -33,6 +33,14 @@ Describe 'Write-ClaudeStatusLine' {
         { & $script:ScriptPath -InputJson '{kaputt' -CachePath $cache -LogPath $TestDrive } | Should -Not -Throw
         & $script:ScriptPath -InputJson '{kaputt' -CachePath $cache -LogPath $TestDrive | Should -Match 'Fehler'
     }
+    It 'funktioniert mit Schrägstrichen im Pfad und ohne -CachePath/-LogPath (Aufruf wie durch Claude Code)' {
+        # Windows PowerShell 5.1 lässt $PSScriptRoot in Parameter-Standardwerten dann leer
+        $shell = (Get-Process -Id $PID).Path
+        $slashPath = ([System.IO.Path]::GetFullPath($script:ScriptPath)) -replace '\\', '/'
+        $out = $script:Full | & $shell -NoProfile -ExecutionPolicy Bypass -File $slashPath -WhatIf
+        ($out -join "`n") | Should -Match 'Opus \| Kontext 23 % \| Sitzung 6 % \| Woche 42 %'
+        ($out -join "`n") | Should -Not -Match 'Join-Path'
+    }
     It 'liest das JSON auch über stdin' {
         $cache = Join-Path $TestDrive 'rl5.json'
         $shell = (Get-Process -Id $PID).Path

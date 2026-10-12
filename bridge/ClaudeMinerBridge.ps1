@@ -70,14 +70,26 @@
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [string]$ConfigPath = (Join-Path $PSScriptRoot 'config.json'),
+    [string]$ConfigPath,
     [switch]$Test,
     [switch]$SetAdminKey,
-    [string]$LogPath = $PSScriptRoot,
+    [string]$LogPath,
     [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Ordner des Skripts selbst bestimmen: Windows PowerShell 5.1 liefert $PSScriptRoot in Parameter-Standardwerten
+# leer, wenn das Skript mit Schrägstrichen aufgerufen wird (C:/Tools/...), wie es Claude Code für die Statuszeile tut.
+$script:ScriptDir = $PSScriptRoot
+foreach ($candidate in @($PSCommandPath, $MyInvocation.MyCommand.Path, $MyInvocation.MyCommand.Definition)) {
+    if (-not $script:ScriptDir -and $candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        $script:ScriptDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($candidate))
+    }
+}
+if (-not $script:ScriptDir) { $script:ScriptDir = (Get-Location).Path }
+if (-not $ConfigPath) { $ConfigPath = Join-Path $script:ScriptDir 'config.json' }
+if (-not $LogPath) { $LogPath = $script:ScriptDir }
 $script:LogFile = Join-Path $LogPath ("Log_{0:yyyy-MM-dd}.log" -f (Get-Date))
 $script:AnthropicBaseUri = 'https://api.anthropic.com/v1/organizations'
 $script:AnthropicVersion = '2023-06-01'

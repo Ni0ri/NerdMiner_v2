@@ -64,9 +64,10 @@
 
 .NOTES
     Autor:   Artur Warkentin
-    Version: 1.2.0
+    Version: 1.2.1
     Datum:   2026-10-12
     Changelog:
+      1.2.1  2026-10-12  Statuszeile mit festen Pfaden (PS 5.1 + Schrägstriche), eigener alter Eintrag wird aktualisiert
       1.2.0  2026-10-12  Aufgabe startet über "conhost.exe --headless" (kein aufblitzendes Fenster), -NoHeadless
       1.1.0  2026-10-12  Write-ClaudeStatusLine.ps1 mitkopieren, Schalter -ConfigureStatusLine
       1.0.0  2026-10-12  Erstversion
@@ -80,11 +81,22 @@ param(
     [switch]$NoHeadless,
     [string]$ClaudeSettingsPath = (Join-Path (Join-Path $HOME '.claude') 'settings.json'),
     [switch]$Uninstall,
-    [string]$LogPath = $PSScriptRoot,
+    [string]$LogPath,
     [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Ordner des Skripts selbst bestimmen: Windows PowerShell 5.1 liefert $PSScriptRoot in Parameter-Standardwerten
+# leer, wenn das Skript mit Schrägstrichen aufgerufen wird (C:/Tools/...), wie es Claude Code für die Statuszeile tut.
+$script:ScriptDir = $PSScriptRoot
+foreach ($candidate in @($PSCommandPath, $MyInvocation.MyCommand.Path, $MyInvocation.MyCommand.Definition)) {
+    if (-not $script:ScriptDir -and $candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        $script:ScriptDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($candidate))
+    }
+}
+if (-not $script:ScriptDir) { $script:ScriptDir = (Get-Location).Path }
+if (-not $LogPath) { $LogPath = $script:ScriptDir }
 $script:LogFile = Join-Path $LogPath ("Log_{0:yyyy-MM-dd}.log" -f (Get-Date))
 
 function Write-Log {
@@ -139,11 +151,14 @@ function Get-InstallPlan {
 function Get-StatusLineCommand {
     <# Befehl für settings.json; Claude Code führt ihn unter Windows ggf. über Git Bash aus -> Schrägstriche. #>
     param([Parameter(Mandatory)][string]$ScriptPath)
-    return 'powershell -NoProfile -ExecutionPolicy Bypass -File {0}' -f ($ScriptPath -replace '\\', '/')
+    $dir = (Split-Path -Parent $ScriptPath) -replace '\\', '/'
+    # Cache- und Log-Pfad ausdrücklich mitgeben, damit sie nicht vom Arbeitsordner von Claude Code abhängen
+    return 'powershell -NoProfile -ExecutionPolicy Bypass -File {0} -CachePath {1}/ratelimits.json -LogPath {1}' -f ($ScriptPath -replace '\\', '/'), $dir
 }
 
 function Get-StatusLineChange {
-    <# Prüft die Claude-Code-Einstellungen: Action = add | same | conflict. Bei add enthält Settings das neue Objekt. #>
+    <# Prüft die Claude-Code-Einstellungen: Action = add | update | same | conflict.
+       Bei add/update enthält Settings das geänderte Objekt; eine fremde Statuszeile bleibt unangetastet. #>
     param($Settings, [Parameter(Mandatory)][string]$Command)
     if ($null -eq $Settings) { $Settings = [pscustomobject]@{} }
     $existing = $Settings.PSObject.Properties['statusLine']
@@ -152,6 +167,11 @@ function Get-StatusLineChange {
         $current = $null
         if ($null -ne $cmdProp) { $current = [string]$cmdProp.Value }
         if ($current -eq $Command) { return [pscustomobject]@{ Action = 'same'; Settings = $Settings; Current = $current } }
+        if ($current -match 'Write-ClaudeStatusLine\.ps1') {
+            # Eigener, älterer Eintrag: aktualisieren statt als fremd zu melden
+            $existing.Value | Add-Member -NotePropertyName 'command' -NotePropertyValue $Command -Force
+            return [pscustomobject]@{ Action = 'update'; Settings = $Settings; Current = $current }
+        }
         return [pscustomobject]@{ Action = 'conflict'; Settings = $Settings; Current = $current }
     }
     $Settings | Add-Member -NotePropertyName 'statusLine' -NotePropertyValue ([pscustomobject]@{ type = 'command'; command = $Command }) -Force
@@ -168,7 +188,8 @@ function Invoke-SelfTest {
     $same = Get-StatusLineChange -Settings $add.Settings -Command $cmd
     $conflict = Get-StatusLineChange -Settings ([pscustomobject]@{ statusLine = [pscustomobject]@{ type = 'command'; command = 'x' } }) -Command $cmd
     $tests = @(
-        @{ Name = 'Statuszeilen-Befehl mit Schrägstrichen'; Ok = ($cmd -eq 'powershell -NoProfile -ExecutionPolicy Bypass -File C:/Tools/ClaudeMinerBridge/Write-ClaudeStatusLine.ps1') }
+        @{ Name = 'Statuszeilen-Befehl mit Schrägstrichen und festen Pfaden'; Ok = ($cmd -eq 'powershell -NoProfile -ExecutionPolicy Bypass -File C:/Tools/ClaudeMinerBridge/Write-ClaudeStatusLine.ps1 -CachePath C:/Tools/ClaudeMinerBridge/ratelimits.json -LogPath C:/Tools/ClaudeMinerBridge') }
+        @{ Name = 'Älterer eigener Eintrag wird aktualisiert'; Ok = ((Get-StatusLineChange -Settings ([pscustomobject]@{ statusLine = [pscustomobject]@{ type = 'command'; command = 'powershell -File C:/Tools/ClaudeMinerBridge/Write-ClaudeStatusLine.ps1' } }) -Command $cmd).Action -eq 'update') }
         @{ Name = 'Statuszeile wird ergänzt, andere Einstellungen bleiben'; Ok = ($add.Action -eq 'add' -and $add.Settings.model -eq 'opus' -and $add.Settings.statusLine.command -eq $cmd) }
         @{ Name = 'Gleiche Statuszeile wird erkannt'; Ok = ($same.Action -eq 'same') }
         @{ Name = 'Fremde Statuszeile wird nicht überschrieben'; Ok = ($conflict.Action -eq 'conflict' -and $conflict.Settings.statusLine.command -eq 'x') }
@@ -215,7 +236,7 @@ try {
             }
         }
         $configExists = Test-Path -LiteralPath (Join-Path $InstallPath 'config.json')
-        foreach ($step in (Get-InstallPlan -SourceFolder $PSScriptRoot -TargetFolder $InstallPath -ConfigExists $configExists)) {
+        foreach ($step in (Get-InstallPlan -SourceFolder $script:ScriptDir -TargetFolder $InstallPath -ConfigExists $configExists)) {
             if ($PSCmdlet.ShouldProcess($step.Target, "Kopieren von $($step.Source)")) {
                 Copy-Item -LiteralPath $step.Source -Destination $step.Target -Force
                 Write-Log "Kopiert: $($step.Target)"
@@ -253,7 +274,7 @@ try {
                     Write-Log ("Claude Code hat schon eine andere Statuszeile ('{0}'). Nicht geändert. Zum Umstellen in {1} " -f $change.Current, $ClaudeSettingsPath) -Level WARN
                     Write-Log "  statusLine.command auf '$statusCmd' setzen." -Level WARN
                 }
-                'add' {
+                { $_ -in @('add', 'update') } {
                     if ($PSCmdlet.ShouldProcess($ClaudeSettingsPath, 'Claude-Code-Statuszeile eintragen')) {
                         $dir = Split-Path -Parent $ClaudeSettingsPath
                         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
