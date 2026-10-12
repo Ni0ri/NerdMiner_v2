@@ -88,6 +88,8 @@ Rand). Der Claude-Screen nutzt die volle Fläche.
 ### Claude-Screen
 - Kosten heute und Monat, Tokens ein/aus (kompakt, z. B. `1,2 M`), Balken „Monat vs. Budget“
   (grün < 75 %, gelb < 100 %, rot ab 100 %), Zeitpunkt der letzten Aktualisierung.
+- **Abo-Limits** (claude.ai Pro/Max): Balken „Abo Sitzung (5 h)“ und „Abo Woche“ mit Reset-Zeitpunkt
+  (grün < 75 %, gelb < 90 %, rot ab 90 %) und Alter der Werte, siehe [Abo-Limits](#abo-limits-sitzung-und-woche).
 - Statuszeile unten: Hashrate, Best Diff, Temperatur.
 - Fehlende Werte werden als `-` angezeigt.
 - Seit Neustart keine Daten: „Keine Daten - Bridge auf dem PC aktiv?“. Der Miner läuft davon unabhängig normal.
@@ -127,6 +129,12 @@ Format (alle Felder optional, unbekannte Felder werden ignoriert):
   "budget_usd": 100.0
 }
 ```
+Optional zusätzlich die Abo-Limits (die Bridge formatiert die Reset-Zeit schon in Berliner Zeit):
+```json
+  "limits": { "session": { "used_pct": 6, "resets": "19:10" },
+              "week":    { "used_pct": 42, "resets": "Fr 00:00" },
+              "age_min": 3 }
+```
 `GET /claude` liefert zusätzlich `received` (true/false) und `age_s` (Sekunden seit Empfang).
 
 ## 6. Bridge auf dem Windows-PC einrichten
@@ -135,6 +143,7 @@ Format (alle Felder optional, unbekannte Felder werden ignoriert):
 cd <repo>\bridge
 .\Install-Task.ps1 -WhatIf     # Trockenlauf: zeigt Kopieraktionen und geplante Aufgabe
 .\Install-Task.ps1             # kopiert nach C:\Tools\ClaudeMinerBridge, Aufgabe alle 5 min
+.\Install-Task.ps1 -ConfigureStatusLine   # optional: Abo-Limits über die Claude-Code-Statuszeile
 notepad C:\Tools\ClaudeMinerBridge\config.json
 C:\Tools\ClaudeMinerBridge\ClaudeMinerBridge.ps1 -Test   # Beispieldaten senden -> Screen prüfen
 ```
@@ -149,6 +158,7 @@ C:\Tools\ClaudeMinerBridge\ClaudeMinerBridge.ps1 -Test   # Beispieldaten senden 
 | `budget_usd` | Monatsbudget für den Fortschrittsbalken (leer/0 = kein Balken) |
 | `admin_key_file` | Datei mit dem DPAPI-verschlüsselten Admin-Key (Standard `adminkey.dpapi`) |
 | `ccusage_command`, `ccusage_args` | Aufruf von ccusage, Standard `npx --yes ccusage@latest` |
+| `limits_cache` | Datei, in die die Claude-Code-Statuszeile die Abo-Limits schreibt (Standard `ratelimits.json`) |
 | `log_retention_days` | Logdateien `Log_yyyy-MM-dd.log` älter als n Tage werden gelöscht (Standard 14) |
 
 `config.json` und `*.dpapi` stehen in `bridge/.gitignore` und landen nie im Repository.
@@ -178,6 +188,27 @@ Genutzte Endpunkte (geprüft gegen die offizielle Doku „Usage and Cost API“)
 - **Die Kosten sind rechnerische API-Preise, keine echten Abo-Kosten.** Das Display beschriftet das entsprechend.
 - Für die Nutzungslimits des claude.ai-Abos gibt es keine offizielle API; sie werden bewusst nicht per Scraping
   oder über inoffizielle Endpunkte abgefragt.
+
+### Abo-Limits (Sitzung und Woche)
+Die Werte „Aktuelle Sitzung“ und „Diese Woche“ aus den claude.ai-Einstellungen gibt Claude Code bei Pro/Max-Abos
+offiziell an seine **Statuszeile** weiter (`rate_limits.five_hour` / `rate_limits.seven_day`, siehe
+[Claude-Code-Doku „Status line“](https://code.claude.com/docs/en/statusline)). Es wird nichts gescrapt.
+
+1. Einrichten:
+   ```powershell
+   .\Install-Task.ps1 -ConfigureStatusLine -WhatIf   # zeigt, was in %USERPROFILE%\.claude\settings.json passiert
+   .\Install-Task.ps1 -ConfigureStatusLine
+   ```
+   Das trägt `Write-ClaudeStatusLine.ps1` als Statuszeile ein (mit Sicherungskopie der settings.json). Hast du
+   schon eine eigene Statuszeile, wird sie **nicht** überschrieben; das Skript nennt dann den Befehl zum Eintragen.
+2. Claude Code (lokal) neu starten und eine Nachricht senden. Unten erscheint z. B.
+   `Opus | Kontext 12 % | Sitzung 6 % | Woche 42 %`, und `C:\Tools\ClaudeMinerBridge\ratelimits.json` wird geschrieben.
+3. Die Bridge schickt die Werte beim nächsten Lauf mit.
+
+Grenzen: Die Werte werden nur aktualisiert, solange Claude Code **auf diesem PC** läuft (nach jeder Antwort).
+Nutzung in claude.ai im Browser oder in Cloud-Sitzungen erscheint erst, wenn Claude Code lokal wieder eine
+Antwort bekommt. Das Display zeigt deshalb das Alter der Werte („vor 3 min“, ab 6 h gelb). Ist ein Fenster
+inzwischen zurückgesetzt, zeigt es 0 %.
 
 ### Bridge-Parameter
 | Parameter | Wirkung |

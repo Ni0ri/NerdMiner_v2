@@ -21,6 +21,29 @@ Describe 'Install-Task Hilfsfunktionen' {
     }
 }
 
+Describe 'Install-Task Statuszeile' {
+    It 'ergänzt die Statuszeile und lässt andere Einstellungen stehen' {
+        $cmd = Get-StatusLineCommand -ScriptPath 'C:\Tools\ClaudeMinerBridge\Write-ClaudeStatusLine.ps1'
+        $cmd | Should -Be 'powershell -NoProfile -ExecutionPolicy Bypass -File C:/Tools/ClaudeMinerBridge/Write-ClaudeStatusLine.ps1'
+        $r = Get-StatusLineChange -Settings ([pscustomobject]@{ model = 'opus'; permissions = [pscustomobject]@{ allow = @('Bash(ls)') } }) -Command $cmd
+        $r.Action | Should -Be 'add'
+        $r.Settings.model | Should -Be 'opus'
+        $r.Settings.permissions.allow | Should -Be @('Bash(ls)')
+        $r.Settings.statusLine.type | Should -Be 'command'
+    }
+    It 'überschreibt keine fremde Statuszeile' {
+        $r = Get-StatusLineChange -Settings ([pscustomobject]@{ statusLine = [pscustomobject]@{ type = 'command'; command = 'mein.sh' } }) -Command 'x'
+        $r.Action | Should -Be 'conflict'
+        $r.Current | Should -Be 'mein.sh'
+    }
+    It 'ohne settings.json wird eine neue angelegt' {
+        (Get-StatusLineChange -Settings $null -Command 'x').Action | Should -Be 'add'
+    }
+    It 'Installationsplan enthält das Statuszeilen-Skript' {
+        @(Get-InstallPlan -SourceFolder 'a' -TargetFolder 'b' -ConfigExists $true).Target -match 'Write-ClaudeStatusLine\.ps1$' | Should -Not -BeNullOrEmpty
+    }
+}
+
 Describe 'Install-Task Ablauf (nur Windows)' -Skip:(-not $IsWindows -and $PSVersionTable.PSVersion.Major -ge 6) {
     It '-WhatIf ändert nichts' {
         $target = Join-Path $TestDrive 'ziel'
@@ -30,5 +53,19 @@ Describe 'Install-Task Ablauf (nur Windows)' -Skip:(-not $IsWindows -and $PSVers
         Should -Invoke Register-ScheduledTask -Times 0
         Should -Invoke Copy-Item -Times 0
         Test-Path $target | Should -BeFalse
+    }
+    It '-ConfigureStatusLine schreibt settings.json ohne BOM und mit Sicherung' {
+        $target = Join-Path $TestDrive 'ziel2'
+        $settings = Join-Path $TestDrive 'claude\settings.json'
+        New-Item -ItemType Directory -Path (Split-Path $settings) -Force | Out-Null
+        [System.IO.File]::WriteAllText($settings, '{"model":"opus"}')
+        Mock Register-ScheduledTask {}
+        & $script:ScriptPath -InstallPath $target -TaskName 'ClaudeMinerBridgePesterTest' -LogPath $TestDrive -ConfigureStatusLine -ClaudeSettingsPath $settings
+        $bytes = [System.IO.File]::ReadAllBytes($settings)
+        $bytes[0] | Should -Be ([byte][char]'{')
+        $s = Get-Content $settings -Raw | ConvertFrom-Json
+        $s.model | Should -Be 'opus'
+        $s.statusLine.command | Should -Match 'Write-ClaudeStatusLine\.ps1$'
+        @(Get-ChildItem (Split-Path $settings) -Filter 'settings.json.bak-*').Count | Should -Be 1
     }
 }

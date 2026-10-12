@@ -155,6 +155,47 @@ Describe 'Payload und Konfiguration' {
     }
 }
 
+Describe 'Abo-Limits aus der Statuszeile' {
+    It 'Reset heute als Uhrzeit, sonst mit Wochentag (Berliner Zeit)' {
+        $now = [datetime]'2026-10-12T10:00:00'
+        Format-ResetText -ResetsAt 1791824400 -UtcNow $now -TimeZone $script:Tz | Should -Be '19:00'
+        Format-ResetText -ResetsAt 1792101600 -UtcNow $now -TimeZone $script:Tz | Should -Be 'Fr 00:00'
+        Format-ResetText -ResetsAt 0 -UtcNow $now -TimeZone $script:Tz | Should -Be ''
+    }
+    It 'wandelt den Cache in den limits-Block, abgelaufene Fenster zählen als 0 %' {
+        $cache = ConvertFrom-Json '{"captured_utc":"2026-10-12T09:40:00Z","five_hour":{"used_percentage":80,"resets_at":1791795600},"seven_day":{"used_percentage":41.96,"resets_at":1792101600}}'
+        $l = ConvertTo-LimitPayload -Cache $cache -UtcNow ([datetime]'2026-10-12T10:00:00') -TimeZone $script:Tz
+        $l.session.used_pct | Should -Be 0
+        $l.week.used_pct | Should -Be 42
+        $l.week.resets | Should -Be 'Fr 00:00'
+        $l.age_min | Should -Be 20
+    }
+    It 'ohne Cache gibt es keinen limits-Block' {
+        ConvertTo-LimitPayload -Cache $null -UtcNow ([datetime]::UtcNow) -TimeZone $script:Tz | Should -BeNullOrEmpty
+        Read-LimitCache -Path (Join-Path $TestDrive 'fehlt.json') | Should -BeNullOrEmpty
+    }
+    It 'Payload mit Limits bleibt unter 1 KB' {
+        $json = Get-TestPayload -Updated '2026-10-12T12:55:00+02:00'
+        $json.Length | Should -BeLessThan 1024
+        ($json | ConvertFrom-Json).limits.week.resets | Should -Be 'Fr 00:00'
+    }
+    It 'Hauptablauf schickt die Limits aus ratelimits.json mit' {
+        Mock Invoke-RestMethod { [pscustomobject]@{ ok = $true } }
+        Mock Invoke-CcusageCommand { '{"daily":[]}' }
+        $dir = Join-Path $TestDrive ('lim_' + [guid]::NewGuid())
+        New-Item -ItemType Directory -Path $dir | Out-Null
+        $cfg = Join-Path $dir 'config.json'
+        '{"esp_host":"192.0.2.50","source":"ccusage"}' | Set-Content -Path $cfg
+        $future = [int64]([datetime]::UtcNow.AddHours(2) - [datetime]::SpecifyKind([datetime]'1970-01-01', 'Utc')).TotalSeconds
+        ('{"captured_utc":"' + [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ') + '","five_hour":{"used_percentage":6,"resets_at":' + $future + '}}') |
+            Set-Content -Path (Join-Path $dir 'ratelimits.json')
+        & $script:ScriptPath -ConfigPath $cfg -LogPath $dir
+        Should -Invoke Invoke-RestMethod -Times 1 -ParameterFilter {
+            $o = [System.Text.Encoding]::UTF8.GetString($Body) | ConvertFrom-Json
+            $o.limits.session.used_pct -eq 6 -and $o.limits.age_min -eq 0 -and $null -eq $o.limits.week }
+    }
+}
+
 Describe 'Senden an den ESP' {
     It 'sendet POST mit X-Token und UTF-8-Body' {
         Mock Invoke-RestMethod { [pscustomobject]@{ ok = $true } }

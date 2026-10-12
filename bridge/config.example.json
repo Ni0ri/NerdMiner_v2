@@ -7,5 +7,6 @@
   "admin_key_file": "adminkey.dpapi",
   "ccusage_command": "npx",
   "ccusage_args": [ "--yes", "ccusage@latest" ],
+  "limits_cache": "ratelimits.json",
   "log_retention_days": 14
 }

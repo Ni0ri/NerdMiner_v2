@@ -15,7 +15,11 @@
         * Input-Tokens = uncached + cache_read + cache_creation (5m + 1h), Output-Tokens = output_tokens.
     - ccusage: lokale Claude-Code-Logs über das Community-Tool ccusage (npm), Zeitzone Europe/Berlin.
         * Kosten sind rechnerische API-Preise, keine echten Abo-Kosten (Display beschriftet das).
-    Für die Nutzungslimits des claude.ai-Abos gibt es keine offizielle API; sie werden bewusst nicht abgefragt.
+    Abo-Limits (claude.ai Pro/Max, "Aktuelle Sitzung" und "Diese Woche"):
+    - kommen aus der offiziell dokumentierten Statuszeilen-Schnittstelle von Claude Code
+      (rate_limits.five_hour / seven_day). Write-ClaudeStatusLine.ps1 merkt sie sich in ratelimits.json,
+      dieses Skript schickt sie als "limits" mit. Kein Scraping, keine inoffiziellen Endpunkte.
+    - Aktuell nur, solange Claude Code lokal läuft; das Alter wird mitgeschickt und am Display angezeigt.
 
     Voraussetzungen:
     - Windows PowerShell 5.1 oder PowerShell 7.x
@@ -57,9 +61,10 @@
 
 .NOTES
     Autor:   Artur Warkentin
-    Version: 1.0.1
+    Version: 1.1.0
     Datum:   2026-10-12
     Changelog:
+      1.1.0  2026-10-12  Abo-Limits (Sitzung/Woche) aus der Claude-Code-Statuszeile mitsenden
       1.0.1  2026-10-12  ccusage: stderr-Hinweise von npm brechen unter Windows PowerShell 5.1 nicht mehr ab
       1.0.0  2026-10-12  Erstversion: Quellen admin_api und ccusage, -Test, DPAPI-Key, Log-Rotation
 #>
@@ -240,6 +245,61 @@ function ConvertFrom-CcusageJson {
     return $result
 }
 
+function Format-ResetText {
+    <# Reset-Zeitpunkt (Unix-Sekunden) als kurze Berliner Zeit: heute "19:10", sonst "Fr 00:00". #>
+    param([int64]$ResetsAt, [Parameter(Mandatory)][datetime]$UtcNow, [Parameter(Mandatory)][System.TimeZoneInfo]$TimeZone)
+    if ($ResetsAt -le 0) { return '' }
+    $utc = ([datetime]'1970-01-01T00:00:00Z').ToUniversalTime().AddSeconds($ResetsAt)
+    $utc = [datetime]::SpecifyKind($utc, [System.DateTimeKind]::Utc)
+    $local = [System.TimeZoneInfo]::ConvertTimeFromUtc($utc, $TimeZone)
+    $today = [System.TimeZoneInfo]::ConvertTimeFromUtc([datetime]::SpecifyKind($UtcNow, [System.DateTimeKind]::Utc), $TimeZone).Date
+    $time = $local.ToString('HH:mm', [cultureinfo]::InvariantCulture)
+    if ($local.Date -eq $today) { return $time }
+    $days = @('So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa')
+    return '{0} {1}' -f $days[[int]$local.DayOfWeek], $time
+}
+
+function ConvertTo-LimitPayload {
+    <# Wandelt ratelimits.json (von Write-ClaudeStatusLine.ps1) in den "limits"-Block für den ESP.
+       Abgelaufene Fenster (resets_at vorbei) zählen als 0 %, weil das Limit inzwischen zurückgesetzt ist. #>
+    param($Cache, [Parameter(Mandatory)][datetime]$UtcNow, [Parameter(Mandatory)][System.TimeZoneInfo]$TimeZone)
+    if ($null -eq $Cache) { return $null }
+    $nowUtc = [datetime]::SpecifyKind($UtcNow, [System.DateTimeKind]::Utc)
+    $nowEpoch = [int64]($nowUtc - [datetime]::SpecifyKind([datetime]'1970-01-01', 'Utc')).TotalSeconds
+    $result = [ordered]@{}
+    foreach ($pair in @(@('session', 'five_hour'), @('week', 'seven_day'))) {
+        $w = Get-PropertyValue $Cache $pair[1]
+        if ($null -eq $w) { continue }
+        $pct = Get-PropertyValue $w 'used_percentage'
+        if ($null -eq $pct) { continue }
+        $resets = [int64](Get-NumberOrZero (Get-PropertyValue $w 'resets_at'))
+        if ($resets -gt 0 -and $resets -le $nowEpoch) {
+            $result[$pair[0]] = [ordered]@{ used_pct = 0; resets = '' }
+        }
+        else {
+            $result[$pair[0]] = [ordered]@{
+                used_pct = [math]::Round((Get-NumberOrZero $pct), 1, [System.MidpointRounding]::AwayFromZero)
+                resets   = (Format-ResetText -ResetsAt $resets -UtcNow $nowUtc -TimeZone $TimeZone)
+            }
+        }
+    }
+    if ($result.Count -eq 0) { return $null }
+    $captured = ConvertTo-UtcDateTime (Get-PropertyValue $Cache 'captured_utc')
+    if ($null -ne $captured) {
+        $age = [int][math]::Floor(($nowUtc - $captured).TotalMinutes)
+        if ($age -lt 0) { $age = 0 }
+        $result['age_min'] = $age
+    }
+    return $result
+}
+
+function Read-LimitCache {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try { return ConvertFrom-Json -InputObject (Get-Content -LiteralPath $Path -Raw -Encoding UTF8) }
+    catch { Write-Log "Abo-Limits ($Path) unlesbar: $($_.Exception.Message)" -Level WARN; return $null }
+}
+
 function ConvertTo-ClaudePayload {
     <# Baut das JSON für POST /claude (max. ~1 KB). Fehlende Werte werden weggelassen. #>
     param(
@@ -247,7 +307,8 @@ function ConvertTo-ClaudePayload {
         [Parameter(Mandatory)][string]$Updated,
         $Today,
         $Month,
-        [Nullable[double]]$BudgetUsd = $null
+        [Nullable[double]]$BudgetUsd = $null,
+        $Limits = $null
     )
     $p = [ordered]@{ source = $Source; updated = $Updated }
     foreach ($name in @('today', 'month')) {
@@ -260,6 +321,7 @@ function ConvertTo-ClaudePayload {
         $p[$name] = $o
     }
     if ($null -ne $BudgetUsd -and $BudgetUsd -gt 0) { $p['budget_usd'] = [double]$BudgetUsd }
+    if ($null -ne $Limits) { $p['limits'] = $Limits }
     $json = $p | ConvertTo-Json -Depth 4 -Compress
     if ([System.Text.Encoding]::UTF8.GetByteCount($json) -gt 1024) { throw "Payload zu groß ($($json.Length) Zeichen, max. 1024)." }
     return $json
@@ -269,7 +331,8 @@ function Get-TestPayload {
     param([Parameter(Mandatory)][string]$Updated, [Nullable[double]]$BudgetUsd = 100.0)
     ConvertTo-ClaudePayload -Source 'test' -Updated $Updated `
         -Today ([ordered]@{ input_tokens = 120000; output_tokens = 45000; cost_usd = 1.84 }) `
-        -Month ([ordered]@{ input_tokens = 3100000; output_tokens = 980000; cost_usd = 41.20 }) -BudgetUsd $BudgetUsd
+        -Month ([ordered]@{ input_tokens = 3100000; output_tokens = 980000; cost_usd = 41.20 }) -BudgetUsd $BudgetUsd `
+        -Limits ([ordered]@{ session = [ordered]@{ used_pct = 6; resets = '19:10' }; week = [ordered]@{ used_pct = 42; resets = 'Fr 00:00' }; age_min = 3 })
 }
 
 function Read-BridgeConfig {
@@ -294,6 +357,9 @@ function Read-BridgeConfig {
     if ($retention -le 0) { $retention = 14 }
     $ccCmd = [string](Get-PropertyValue $cfg 'ccusage_command')
     if (-not $ccCmd) { $ccCmd = 'npx' }
+    $limitsCache = [string](Get-PropertyValue $cfg 'limits_cache')
+    if (-not $limitsCache) { $limitsCache = 'ratelimits.json' }
+    if (-not [System.IO.Path]::IsPathRooted($limitsCache)) { $limitsCache = Join-Path (Split-Path -Parent $Path) $limitsCache }
     $ccArgs = @(foreach ($a in @(Get-PropertyValue $cfg 'ccusage_args')) { if ($null -ne $a) { [string]$a } })
     if ($ccArgs.Count -eq 0) { $ccArgs = @('--yes', 'ccusage@latest') }
     [pscustomobject]@{
@@ -305,6 +371,7 @@ function Read-BridgeConfig {
         LogRetentionDays = $retention
         CcusageCommand   = $ccCmd
         CcusageArgs      = $ccArgs
+        LimitsCache      = $limitsCache
     }
 }
 
@@ -328,7 +395,7 @@ function Invoke-AnthropicReport {
         [Parameter(Mandatory)][hashtable]$Query,
         [Parameter(Mandatory)][string]$ApiKey
     )
-    $headers = @{ 'x-api-key' = $ApiKey; 'anthropic-version' = $script:AnthropicVersion; 'User-Agent' = 'ClaudeMinerBridge/1.0.1' }
+    $headers = @{ 'x-api-key' = $ApiKey; 'anthropic-version' = $script:AnthropicVersion; 'User-Agent' = 'ClaudeMinerBridge/1.1.0' }
     $buckets = New-Object System.Collections.Generic.List[object]
     $page = $null
     for ($i = 0; $i -lt 20; $i++) {
@@ -474,6 +541,8 @@ function Invoke-SelfTest {
     $cc = ConvertFrom-CcusageJson -Json $ccJson -TodayText '2026-10-12' -MonthPrefix '2026-10'
     $single = ConvertFrom-CcusageJson -Json '{"daily":[{"period":"2026-10-12","inputTokens":1,"outputTokens":2,"totalCost":3}]}' -TodayText '2026-10-12' -MonthPrefix '2026-10'
     $payload = Get-TestPayload -Updated '2026-10-12T12:55:00+02:00'
+    $limCache = ConvertFrom-Json '{"captured_utc":"2026-10-12T09:55:00Z","five_hour":{"used_percentage":80,"resets_at":1791795600},"seven_day":{"used_percentage":42,"resets_at":1792101600}}'
+    $lim = ConvertTo-LimitPayload -Cache $limCache -UtcNow ([datetime]'2026-10-12T10:00:00') -TimeZone $tz
     $partial = ConvertTo-ClaudePayload -Source 'ccusage' -Updated 'x' -Today ([ordered]@{ cost_usd = 1.005 })
 
     $tests = @(
@@ -491,6 +560,8 @@ function Invoke-SelfTest {
         @{ Name = 'Payload enthält alle Felder'; Ok = ($payload -match '"source":"test"' -and $payload -match '"input_tokens":3100000' -and $payload -match '"budget_usd":100') }
         @{ Name = 'Payload ohne fehlende Felder'; Ok = ($partial -notmatch 'month' -and $partial -notmatch 'budget' -and $partial -notmatch 'input_tokens' -and $partial -match '"cost_usd":1') }
         @{ Name = 'Payload unter 1 KB'; Ok = ($payload.Length -lt 1024) }
+        @{ Name = 'Reset heute nur Uhrzeit, sonst mit Wochentag'; Ok = ((Format-ResetText -ResetsAt 1791824400 -UtcNow ([datetime]'2026-10-12T10:00:00') -TimeZone $tz) -eq '19:00' -and (Format-ResetText -ResetsAt 1792101600 -UtcNow ([datetime]'2026-10-12T10:00:00') -TimeZone $tz) -eq 'Fr 00:00') }
+        @{ Name = 'Limits: abgelaufenes Fenster zählt als 0 %, Alter in Minuten'; Ok = ($lim.session.used_pct -eq 0 -and $lim.week.used_pct -eq 42 -and $lim.week.resets -eq 'Fr 00:00' -and $lim.age_min -eq 5) }
     )
     $ok = @($tests | Where-Object { $_.Ok }).Count
     foreach ($t in $tests) { Write-Host ('{0} {1}' -f ($(if ($t.Ok) { '[OK]  ' } else { '[FAIL]' })), $t.Name) }
@@ -518,7 +589,9 @@ try {
         return
     }
 
-    $bounds = Get-PeriodBound -UtcNow ([datetime]::UtcNow) -TimeZone (Get-BerlinTimeZone)
+    $tz = Get-BerlinTimeZone
+    $utcNow = [datetime]::UtcNow
+    $bounds = Get-PeriodBound -UtcNow $utcNow -TimeZone $tz
     if ($Test) {
         $json = Get-TestPayload -Updated $bounds.UpdatedIso -BudgetUsd $config.BudgetUsd
     }
@@ -529,7 +602,9 @@ try {
         else {
             $usage = Get-CcusageUsage -Bounds $bounds -Config $config
         }
-        $json = ConvertTo-ClaudePayload -Source $config.Source -Updated $bounds.UpdatedIso -Today $usage.today -Month $usage.month -BudgetUsd $config.BudgetUsd
+        $limits = ConvertTo-LimitPayload -Cache (Read-LimitCache -Path $config.LimitsCache) -UtcNow $utcNow -TimeZone $tz
+        if ($null -eq $limits) { Write-Log "Keine Abo-Limits ($($config.LimitsCache)); Statuszeile in Claude Code eingerichtet?" }
+        $json = ConvertTo-ClaudePayload -Source $config.Source -Updated $bounds.UpdatedIso -Today $usage.today -Month $usage.month -BudgetUsd $config.BudgetUsd -Limits $limits
     }
     Write-Log "Payload: $json"
 

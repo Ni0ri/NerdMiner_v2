@@ -3,3 +3,5 @@ config.json
 *.dpapi
 *.local.json
 Log_*.log
+ratelimits.json
+*.tmp
