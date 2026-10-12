@@ -57,9 +57,10 @@
 
 .NOTES
     Autor:   Artur Warkentin
-    Version: 1.0.0
+    Version: 1.0.1
     Datum:   2026-10-12
     Changelog:
+      1.0.1  2026-10-12  ccusage: stderr-Hinweise von npm brechen unter Windows PowerShell 5.1 nicht mehr ab
       1.0.0  2026-10-12  Erstversion: Quellen admin_api und ccusage, -Test, DPAPI-Key, Log-Rotation
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -327,7 +328,7 @@ function Invoke-AnthropicReport {
         [Parameter(Mandatory)][hashtable]$Query,
         [Parameter(Mandatory)][string]$ApiKey
     )
-    $headers = @{ 'x-api-key' = $ApiKey; 'anthropic-version' = $script:AnthropicVersion; 'User-Agent' = 'ClaudeMinerBridge/1.0.0' }
+    $headers = @{ 'x-api-key' = $ApiKey; 'anthropic-version' = $script:AnthropicVersion; 'User-Agent' = 'ClaudeMinerBridge/1.0.1' }
     $buckets = New-Object System.Collections.Generic.List[object]
     $page = $null
     for ($i = 0; $i -lt 20; $i++) {
@@ -380,11 +381,31 @@ function Invoke-CcusageCommand {
         [Parameter(Mandatory)][string]$Command,
         [string[]]$Arguments
     )
-    $cmd = Get-Command -Name $Command -ErrorAction SilentlyContinue
+    # Bevorzugt npx.cmd statt npx.ps1 (unabhängig von der Ausführungsrichtlinie)
+    $cmd = Get-Command -Name $Command -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $cmd) { $cmd = Get-Command -Name $Command -ErrorAction SilentlyContinue | Select-Object -First 1 }
     if (-not $cmd) { throw "ccusage: Befehl '$Command' nicht gefunden. Node.js installieren (npx) oder 'npm i -g ccusage'." }
-    $out = & $cmd.Source @Arguments 2>$null
-    if ($LASTEXITCODE -ne 0) { throw "ccusage wurde mit Exitcode $LASTEXITCODE beendet." }
-    return ($out -join "`n")
+
+    # Windows PowerShell 5.1 macht aus jeder stderr-Zeile eines externen Programms (z. B. "npm notice")
+    # einen Fehler, der mit ErrorActionPreference = 'Stop' abbricht. Deshalb hier lokal 'Continue',
+    # stderr getrennt sammeln und nur den Exitcode bewerten.
+    $prevPref = $ErrorActionPreference
+    $prevNotifier = $env:NPM_CONFIG_UPDATE_NOTIFIER
+    $ErrorActionPreference = 'Continue'
+    $env:NPM_CONFIG_UPDATE_NOTIFIER = 'false'
+    try {
+        $all = @(& $cmd.Source @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $prevPref
+        $env:NPM_CONFIG_UPDATE_NOTIFIER = $prevNotifier
+    }
+    $stdout = @(foreach ($line in $all) { if ($line -isnot [System.Management.Automation.ErrorRecord]) { [string]$line } })
+    $stderr = @(foreach ($line in $all) { if ($line -is [System.Management.Automation.ErrorRecord]) { $line.ToString() } })
+    if ($stderr.Count -gt 0) { Write-Verbose ("ccusage stderr: " + ($stderr -join ' | ')) }
+    if ($exitCode -ne 0) { throw "ccusage wurde mit Exitcode $exitCode beendet: $(($stderr | Select-Object -Last 3) -join ' ')" }
+    return ($stdout -join "`n")
 }
 
 function Get-CcusageUsage {

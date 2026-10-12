@@ -110,6 +110,26 @@ Describe 'Auswertung ccusage' {
     }
 }
 
+Describe 'Aufruf externer Programme (ccusage)' {
+    BeforeAll {
+        # Die laufende PowerShell dient als "externes Programm", das wie npx auf stderr schreibt
+        $script:Shell = (Get-Process -Id $PID).Path
+    }
+    It 'stderr-Hinweise (npm notice) brechen auch mit ErrorActionPreference Stop nicht ab' {
+        $ErrorActionPreference = 'Stop'
+        $out = Invoke-CcusageCommand -Command $script:Shell -Arguments @('-NoProfile', '-Command',
+            "[Console]::Error.WriteLine('npm notice'); [Console]::Out.WriteLine('{""daily"":[]}')")
+        $out | Should -Be '{"daily":[]}'
+    }
+    It 'Exitcode ungleich 0 wird mit stderr gemeldet' {
+        { Invoke-CcusageCommand -Command $script:Shell -Arguments @('-NoProfile', '-Command',
+                "[Console]::Error.WriteLine('kaputt'); exit 3") } | Should -Throw '*Exitcode 3*kaputt*'
+    }
+    It 'fehlender Befehl wird verständlich gemeldet' {
+        { Invoke-CcusageCommand -Command 'gibtesnicht-xyz' -Arguments @() } | Should -Throw '*nicht gefunden*'
+    }
+}
+
 Describe 'Payload und Konfiguration' {
     It 'Testpayload entspricht dem Format des ESP' {
         $o = Get-TestPayload -Updated '2026-10-12T12:55:00+02:00' | ConvertFrom-Json
