@@ -1,0 +1,81 @@
+name: Claude-Display
+
+on:
+  push:
+    branches: [master, main, 'claude/**', 'feature/**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    name: Host-Tests (src/claude)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: g++ multilib (32-Bit-Lauf wie ESP32)
+        run: sudo apt-get update -q && sudo apt-get install -y -q g++-multilib
+      - name: Tests
+        run: test_host/run.sh
+
+  firmware:
+    name: Firmware ESP32-32E-35
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+          key: pio-${{ hashFiles('platformio.ini') }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: PlatformIO installieren
+        run: pip install --upgrade platformio
+      - name: Build
+        run: pio run -e ESP32-32E-35
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ESP32-32E-35-firmware
+          path: |
+            .pio/build/ESP32-32E-35/*_factory.bin
+            .pio/build/ESP32-32E-35/*_firmware.bin
+
+  bridge:
+    name: Bridge (Pester, PS 5.1 + 7)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Module installieren
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $r = Invoke-ScriptAnalyzer -Path bridge -Recurse -Severity Error
+          $r | Format-Table -AutoSize
+          if ($r) { throw "$($r.Count) Analyzer-Fehler" }
+      - name: SelfTest Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          .\bridge\ClaudeMinerBridge.ps1 -SelfTest -LogPath $env:RUNNER_TEMP
+          .\bridge\Install-Task.ps1 -SelfTest -LogPath $env:RUNNER_TEMP
+      - name: Pester (PowerShell 7)
+        shell: pwsh
+        run: Invoke-Pester -Path bridge/tests -CI
+      - name: Pester (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          Import-Module Pester -MinimumVersion 5.5.0
+          Invoke-Pester -Path bridge/tests -CI
+      - name: Secrets-Check
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Recurse -File bridge, docs, src/claude, test_host, README.md -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '[\\/]\.deps[\\/]' }
+          $hits = $files | Select-String -Pattern 'sk-ant-[a-z0-9]+-[A-Za-z0-9_\-]{10,}|\b(?:\d{1,3}\.){3}\d{1,3}\b' |
+                  Where-Object { $_.Line -notmatch '127\.0\.0\.1|0\.0\.0\.0|192\.168\.4\.1\b|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.' }
+          if ($hits) { $hits | Format-Table Path, LineNumber, Line -AutoSize; throw 'Mögliche Secrets/IP-Adressen gefunden' }
