@@ -27,6 +27,8 @@
 #include "m5CardputerAdv.h"
 #elif defined(ESP32_2432S028R)
 #include "esp322432s028r.h"
+#elif defined(ESP32_32E_35)
+#include "esp3232e35.h"
 #elif defined(ESP32_2432S028_2USB) // For another type of ESP32_2432S028 version with 2 USB connectors
 #include "esp322432s028r.h"
 #elif defined(NERDMINER_T_QT)

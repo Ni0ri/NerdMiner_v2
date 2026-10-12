@@ -20,6 +20,10 @@
 #include "TouchHandler.h"
 #endif
 
+#ifdef CLAUDE_FEATURE
+#include "claude/claudeServer.h"
+#endif
+
 #include <soc/soc_caps.h>
 //#define HW_SHA256_TEST
 
@@ -141,10 +145,10 @@ void setup()
 
   /******** CREATE STRATUM TASK *****/
   static const char stratum_name[] = "(Stratum)";
- #if defined(CONFIG_IDF_TARGET_ESP32) && !defined(ESP32_2432S028R) && !defined(ESP32_2432S028_2USB)
+ #if defined(CONFIG_IDF_TARGET_ESP32) && !defined(ESP32_2432S028R) && !defined(ESP32_2432S028_2USB) && !defined(ESP32_32E_35)
   // Reduced stack for ESP32 classic to save memory
   BaseType_t res2 = xTaskCreatePinnedToCore(runStratumWorker, "Stratum", 12000, (void*)stratum_name, 4, NULL,1);
- #elif defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+ #elif defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
   // Free a little bit of the heap to the screen
   BaseType_t res2 = xTaskCreatePinnedToCore(runStratumWorker, "Stratum", 13500, (void*)stratum_name, 4, NULL,1);
  #else
@@ -215,6 +219,10 @@ void loop() {
   touchHandler.isTouched();
 #endif
   wifiManagerProcess(); // avoid delays() in loop when non-blocking and other long running code
+
+#ifdef CLAUDE_FEATURE
+  claudeServerLoop(); // LAN endpoint /claude, runs in the loop task (never in mining tasks)
+#endif
 
   vTaskDelay(50 / portTICK_PERIOD_MS);
 }

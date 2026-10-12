@@ -243,7 +243,7 @@ void init_WifiManager()
   wm.addParameter(&time_text_box_num);
   wm.addParameter(&features_html);
   wm.addParameter(&save_stats_to_nvs);
-  #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+  #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
   char checkboxParams2[24] = "type=\"checkbox\"";
   if (Settings.invertColors)
   {
@@ -252,12 +252,28 @@ void init_WifiManager()
   WiFiManagerParameter invertColors("inverColors", "Invert Display Colors (if the colors looks weird)", "T", 2, checkboxParams2, WFM_LABEL_AFTER);
   wm.addParameter(&invertColors);
   #endif
-  #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
-    char brightnessConvValue[2];
+  #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
+    char brightnessConvValue[4];
     sprintf(brightnessConvValue, "%d", Settings.Brightness);
     // Text box (Number) - 3 characters maximum
     WiFiManagerParameter brightness_text_box_num("Brightness", "Screen backlight Duty Cycle (0-255)", brightnessConvValue, 3);
     wm.addParameter(&brightness_text_box_num);
+  #endif
+  #ifdef CLAUDE_FEATURE
+    WiFiManagerParameter claude_html("<hr><br><label style=\"font-weight: bold;margin-bottom: 25px;display: inline-block;\">Claude-Anzeige</label>");
+    WiFiManagerParameter claude_token_box("ClaudeToken", "X-Token fuer POST /claude (optional, leer = kein Schutz)", Settings.ClaudeToken, 40);
+    char claudeRotateValue[6];
+    snprintf(claudeRotateValue, sizeof(claudeRotateValue), "%d", Settings.ClaudeRotate);
+    WiFiManagerParameter claude_rotate_box("ClaudeRotate", "Automatisch Miner/Claude wechseln alle n Sekunden (0 = aus)", claudeRotateValue, 4);
+    wm.addParameter(&claude_html);
+    wm.addParameter(&claude_token_box);
+    wm.addParameter(&claude_rotate_box);
+    // Copies the Claude fields from the portal into Settings (used at every place the other fields are read).
+    auto readClaudeParams = [&]() {
+        strlcpy(Settings.ClaudeToken, claude_token_box.getValue(), sizeof(Settings.ClaudeToken));
+        int rotate = atoi(claude_rotate_box.getValue());
+        Settings.ClaudeRotate = (rotate < 0) ? 0 : rotate;
+    };
   #endif
 
     Serial.println("AllDone: ");
@@ -281,11 +297,14 @@ void init_WifiManager()
             Settings.Timezone = atoi(time_text_box_num.getValue());
             //Serial.println(save_stats_to_nvs.getValue());
             Settings.saveStats = (strncmp(save_stats_to_nvs.getValue(), "T", 1) == 0);
-            #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+            #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
                 Settings.invertColors = (strncmp(invertColors.getValue(), "T", 1) == 0);
             #endif
-            #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+            #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
                 Settings.Brightness = atoi(brightness_text_box_num.getValue());
+            #endif
+            #ifdef CLAUDE_FEATURE
+            readClaudeParams();
             #endif
             nvMem.saveConfig(&Settings);
             delay(3*SECOND_MS);
@@ -314,11 +333,14 @@ void init_WifiManager()
                 Settings.Timezone = atoi(time_text_box_num.getValue());
                 // Serial.println(save_stats_to_nvs.getValue());
                 Settings.saveStats = (strncmp(save_stats_to_nvs.getValue(), "T", 1) == 0);
-                #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+                #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
                 Settings.invertColors = (strncmp(invertColors.getValue(), "T", 1) == 0);
                 #endif
-                #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+                #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
                 Settings.Brightness = atoi(brightness_text_box_num.getValue());
+                #endif
+                #ifdef CLAUDE_FEATURE
+                readClaudeParams();
                 #endif
                 nvMem.saveConfig(&Settings);
                 vTaskDelay(2000 / portTICK_PERIOD_MS);      
@@ -364,13 +386,13 @@ void init_WifiManager()
         Serial.print("TimeZone fromUTC: ");
         Serial.println(Settings.Timezone);
 
-        #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+        #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
         Settings.invertColors = (strncmp(invertColors.getValue(), "T", 1) == 0);
         Serial.print("Invert Colors: ");
         Serial.println(Settings.invertColors);        
         #endif
 
-        #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+        #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
         Settings.Brightness = atoi(brightness_text_box_num.getValue());
         Serial.print("Brightness: ");
         Serial.println(Settings.Brightness);
@@ -406,20 +428,26 @@ void init_WifiManager()
     Serial.print("TimeZone fromUTC: ");
     Serial.println(Settings.Timezone);
 
-    #ifdef ESP32_2432S028R
+    #if defined(ESP32_2432S028R) || defined(ESP32_32E_35)
     Settings.invertColors = (strncmp(invertColors.getValue(), "T", 1) == 0);
     Serial.print("Invert Colors: ");
     Serial.println(Settings.invertColors);
+    #endif
+
+    #ifdef CLAUDE_FEATURE
+    readClaudeParams();
+    Serial.print("Claude rotation (s): ");
+    Serial.println(Settings.ClaudeRotate);
     #endif
 
     // Save the custom parameters to FS
     if (shouldSaveConfig)
     {
         nvMem.saveConfig(&Settings);
-        #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+        #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
          if (Settings.invertColors) ESP.restart();                
         #endif
-        #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB)
+        #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
         if (Settings.Brightness != 250) ESP.restart();
         #endif
     }

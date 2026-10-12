@@ -28,7 +28,11 @@ bool nvMemory::saveConfig(TSettings* Settings)
         Serial.println(F("SPIFS: Saving configuration."));
 
         // Create a JSON document
+#ifdef CLAUDE_FEATURE
+        StaticJsonDocument<768> json;
+#else
         StaticJsonDocument<512> json;
+#endif
         json[JSON_SPIFFS_KEY_POOLURL] = Settings->PoolAddress;
         json[JSON_SPIFFS_KEY_POOLPORT] = Settings->PoolPort;
         json[JSON_SPIFFS_KEY_POOLPASS] = Settings->PoolPassword;
@@ -37,6 +41,10 @@ bool nvMemory::saveConfig(TSettings* Settings)
         json[JSON_SPIFFS_KEY_STATS2NV] = Settings->saveStats;
         json[JSON_SPIFFS_KEY_INVCOLOR] = Settings->invertColors;
         json[JSON_SPIFFS_KEY_BRIGHTNESS] = Settings->Brightness;
+#ifdef CLAUDE_FEATURE
+        json[JSON_SPIFFS_KEY_CLAUDETOKEN] = Settings->ClaudeToken;
+        json[JSON_SPIFFS_KEY_CLAUDEROTATE] = Settings->ClaudeRotate;
+#endif
 
         // Open config file
         File configFile = SPIFFS.open(JSON_CONFIG_FILE, "w");
@@ -83,7 +91,11 @@ bool nvMemory::loadConfig(TSettings* Settings)
             if (configFile)
             {
                 Serial.println("SPIFS: Loading config file");
+#ifdef CLAUDE_FEATURE
+                StaticJsonDocument<768> json;
+#else
                 StaticJsonDocument<512> json;
+#endif
                 DeserializationError error = deserializeJson(json, configFile);
                 configFile.close();
                 serializeJsonPretty(json, Serial);
@@ -109,6 +121,10 @@ bool nvMemory::loadConfig(TSettings* Settings)
                     } else {
                         Settings->Brightness = 250;
                     }
+#ifdef CLAUDE_FEATURE
+                    strlcpy(Settings->ClaudeToken, json[JSON_SPIFFS_KEY_CLAUDETOKEN] | "", sizeof(Settings->ClaudeToken));
+                    Settings->ClaudeRotate = json[JSON_SPIFFS_KEY_CLAUDEROTATE] | DEFAULT_CLAUDEROTATE;
+#endif
                     return true;
                 }
                 else
