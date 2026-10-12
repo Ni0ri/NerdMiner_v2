@@ -44,8 +44,9 @@ pio device monitor -e ESP32-32E-35    # Log ansehen (115200 Baud)
 ```
 
 ### Variante B: Web-Flasher (ohne Entwicklungsumgebung)
-1. Fertige Datei `ESP32-32E-35_factory.bin` aus dem GitHub-Actions-Lauf „Claude-Display“ (Artefakt
-   `ESP32-32E-35-firmware`) herunterladen.
+1. Fertige Datei `ESP32-32E-35_factory.bin` aus dem GitHub-Actions-Lauf „Claude-Display“ herunterladen
+   (Lauf öffnen, unten unter **Artifacts** → `ESP32-32E-35-firmware`, ZIP entpacken).
+   Beim Bauen mit PlatformIO liegt sie unter `firmware/<version>/`.
 2. Im Chrome/Edge <https://espressif.github.io/esptool-js/> öffnen, Board per USB verbinden, „Connect“.
 3. „Erase Flash“ (einmalig beim Umstieg von NMMiner), dann die factory.bin an Adresse **0x0** flashen.
 

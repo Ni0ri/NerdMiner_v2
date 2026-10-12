@@ -38,9 +38,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ESP32-32E-35-firmware
+          # post_build_merge.py legt die Dateien unter firmware/<version>/ ab
           path: |
-            .pio/build/ESP32-32E-35/*_factory.bin
-            .pio/build/ESP32-32E-35/*_firmware.bin
+            firmware/*/ESP32-32E-35_factory.bin
+            firmware/*/ESP32-32E-35_firmware.bin
+          if-no-files-found: error
 
   bridge:
     name: Bridge (Pester, PS 5.1 + 7)
