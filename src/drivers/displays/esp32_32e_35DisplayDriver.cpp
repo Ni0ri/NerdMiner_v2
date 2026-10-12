@@ -60,6 +60,16 @@ void getChipInfo(void){
   Serial.println("MHz");  
 }
 
+// Backlight duty from the settings. Values below 10 are treated as invalid: an empty "Brightness" field in the
+// WiFi portal is stored as 0 (atoi("")) and would leave the panel dark. Switching the backlight off on purpose
+// still works with a triple click on the BOOT button (alternateScreenState).
+static int backlightLevel(void)
+{
+  int b = Settings.Brightness;
+  if (b < 10 || b > 255) return DEFAULT_BRIGHTNESS;
+  return b;
+}
+
 void esp32_32e_35_Init(void)
 { 
   // getChipInfo();  
@@ -79,7 +89,9 @@ void esp32_32e_35_Init(void)
   // Using 5000Hz in 8bit resolution, which gives 0-255 possible duty cycle setting.
   ledcSetup(0, 5000, 8);
   ledcAttachPin(TFT_BL, 0);
-  ledcWrite(0, Settings.Brightness);
+  if (backlightLevel() != Settings.Brightness)
+    Serial.printf("Brightness %d ungueltig, verwende %d\n", Settings.Brightness, backlightLevel());
+  ledcWrite(0, backlightLevel());
  
   //background.createSprite(WIDTH, HEIGHT); // Background Sprite
   //background.setSwapBytes(true);
@@ -108,7 +120,7 @@ void esp32_32e_35_AlternateScreenState(void)
   if (screen_state_duty > 0) {
     ledcWrite(0, 0);
   } else {
-    ledcWrite(0, Settings.Brightness);
+    ledcWrite(0, backlightLevel());
   }
 }
 

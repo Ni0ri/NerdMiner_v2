@@ -258,6 +258,11 @@ void init_WifiManager()
     // Text box (Number) - 3 characters maximum
     WiFiManagerParameter brightness_text_box_num("Brightness", "Screen backlight Duty Cycle (0-255)", brightnessConvValue, 3);
     wm.addParameter(&brightness_text_box_num);
+    // Empty or non-numeric field keeps the current value (atoi("") would store 0 = dark screen)
+    auto readBrightness = [&]() {
+        const char *v = brightness_text_box_num.getValue();
+        if (v != NULL && v[0] >= '0' && v[0] <= '9') Settings.Brightness = atoi(v);
+    };
   #endif
   #ifdef CLAUDE_FEATURE
     WiFiManagerParameter claude_html("<hr><br><label style=\"font-weight: bold;margin-bottom: 25px;display: inline-block;\">Claude-Anzeige</label>");
@@ -301,7 +306,7 @@ void init_WifiManager()
                 Settings.invertColors = (strncmp(invertColors.getValue(), "T", 1) == 0);
             #endif
             #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
-                Settings.Brightness = atoi(brightness_text_box_num.getValue());
+                readBrightness();
             #endif
             #ifdef CLAUDE_FEATURE
             readClaudeParams();
@@ -337,7 +342,7 @@ void init_WifiManager()
                 Settings.invertColors = (strncmp(invertColors.getValue(), "T", 1) == 0);
                 #endif
                 #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
-                Settings.Brightness = atoi(brightness_text_box_num.getValue());
+                readBrightness();
                 #endif
                 #ifdef CLAUDE_FEATURE
                 readClaudeParams();
@@ -393,7 +398,7 @@ void init_WifiManager()
         #endif
 
         #if defined(ESP32_2432S028R) || defined(ESP32_2432S028_2USB) || defined(ESP32_32E_35)
-        Settings.Brightness = atoi(brightness_text_box_num.getValue());
+        readBrightness();
         Serial.print("Brightness: ");
         Serial.println(Settings.Brightness);
         #endif
