@@ -19,11 +19,19 @@ Ziel laut Abnahme: Hashrate höchstens ~5 % unter dem Ausgangswert, freier Heap 
 | Firmware / Zustand | Hashrate | Heap frei (min.) | Bemerkung |
 |---|---|---|---|
 | NMMiner (NMTech, Ausgangswert) | ~1,02 MH/s | ~77 KB | vom Nutzer gemessen |
-| NerdMiner v2 ESP32-32E-35, Miner-Screen, ohne Bridge | _offen_ | _offen_ | |
-| NerdMiner v2 ESP32-32E-35, Claude-Screen, Bridge alle 5 min | _offen_ | _offen_ | |
+| NerdMiner v2 ESP32-32E-35, Claude-Screen, Bridge alle 5 min (12.10.2026) | ~350 kH/s | ~148 KB (min. frei 148.684 B, größter Block 110.580 B) | erste Messung, ~1 h Laufzeit |
 | NerdMiner v2 ESP32-32E-35, Rotation 30 s, 24 h | _offen_ | _offen_ | Neustarts: _offen_ |
+| NerdMiner v2 ESP32-32E-35 **ohne** Claude-Feature (Gegenprobe) | _offen_ | _offen_ | zeigt, ob die Erweiterung Hashrate kostet |
 
-Die Werte „offen“ lassen sich nur auf der echten Hardware messen und sind nach dem ersten Flashen einzutragen.
+Die Werte „offen“ lassen sich nur auf der echten Hardware messen.
+
+**Einordnung:** Die Abnahme „höchstens ~5 % unter Ausgangswert“ (NMMiner ~1,02 MH/s) wird mit NerdMiner v2
+**nicht** erreicht: gemessen ~350 kH/s. NMMiner ist eine geschlossene, stark optimierte Firmware; NerdMiner v2
+erreicht auf dem klassischen ESP32 (ohne PSRAM) diesen Wert vermutlich grundsätzlich nicht. Die Hashrate steigt
+nach dem Start in ~1 min auf ~346 kH/s und bleibt dann konstant; die Claude-Erweiterung läuft nur im
+loop()-/Monitor-Task. Ob sie messbar Hashrate kostet, zeigt erst die Gegenprobe ohne Claude-Feature.
+
+**Heap:** Ziel > 40 KB erfüllt (min. frei ~148 KB im Betrieb).
 
 ## Was die Änderung an Ressourcen kostet (aus dem Build)
 
