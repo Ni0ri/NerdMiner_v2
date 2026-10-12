@@ -1,0 +1,11 @@
+{
+  "_hinweis": "Als config.json kopieren und anpassen. config.json und adminkey.dpapi werden von Git ignoriert.",
+  "esp_host": "192.0.2.50",
+  "esp_token": "",
+  "source": "ccusage",
+  "budget_usd": 100.0,
+  "admin_key_file": "adminkey.dpapi",
+  "ccusage_command": "npx",
+  "ccusage_args": [ "--yes", "ccusage@latest" ],
+  "log_retention_days": 14
+}

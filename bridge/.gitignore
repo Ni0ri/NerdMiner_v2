@@ -1,0 +1,5 @@
+# Lokale Konfiguration und Secrets - niemals einchecken
+config.json
+*.dpapi
+*.local.json
+Log_*.log
