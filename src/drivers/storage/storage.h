@@ -20,6 +20,7 @@
 #define DEFAULT_SAVESTATS	false
 #define DEFAULT_INVERTCOLORS	false
 #define DEFAULT_BRIGHTNESS	250
+#define DEFAULT_CLAUDEROTATE	0
 
 // JSON config files
 #define JSON_CONFIG_FILE	"/config.json"
@@ -45,6 +46,8 @@
 #define JSON_SPIFFS_KEY_STATS2NV	"saveStatsToNVS"
 #define JSON_SPIFFS_KEY_INVCOLOR	"invertColors"
 #define JSON_SPIFFS_KEY_BRIGHTNESS	"Brightness"
+#define JSON_SPIFFS_KEY_CLAUDETOKEN	"claudeToken"
+#define JSON_SPIFFS_KEY_CLAUDEROTATE	"claudeRotate"
 
 // settings
 struct TSettings
@@ -59,6 +62,8 @@ struct TSettings
 	bool saveStats{ DEFAULT_SAVESTATS };
 	bool invertColors{ DEFAULT_INVERTCOLORS };
 	int Brightness{ DEFAULT_BRIGHTNESS };
+	char ClaudeToken[41]{ "" };              // optional X-Token for POST/GET /claude (empty = no check)
+	int ClaudeRotate{ DEFAULT_CLAUDEROTATE }; // seconds between miner and Claude screen, 0 = off
 };
 
 #endif // _STORAGE_H_

@@ -1,0 +1,628 @@
+#include "displayDriver.h"
+
+// ESP32-32E with 3.5" ST7796 (480x320, E32R35T/E32N35T), derived from the ESP32-2432S028R driver.
+// The original 320x240 screens are drawn centred via a TFT_eSPI viewport; the Claude screen uses
+// the full 480x320. Touch (XPT2046, shared SPI bus) uses TFT_eSPI's built-in support: any touch
+// switches to the next screen, so no calibration is needed.
+#if defined(ESP32_32E_35)
+
+#include <TFT_eSPI.h>
+#include "media/images_320_170.h"
+#include "media/images_bottom_320_70.h"
+#include "media/myFonts.h"
+#include "media/Free_Fonts.h"
+#include "version.h"
+#include "monitor.h"
+#include "OpenFontRender.h"
+#include <SPI.h>
+#include "rotation.h"
+#include "drivers/storage/nvMemory.h"
+#include "drivers/storage/storage.h"
+#include "claude/claudeScreen.h"
+
+#define WIDTH 130 //320
+#define HEIGHT 170 
+
+// Offset of the classic 320x240 layout on the 480x320 panel
+#define LEGACY_X 80
+#define LEGACY_Y 40
+#define LEGACY_W 320
+#define LEGACY_H 240
+// Touch pressure threshold for getTouchRawZ()
+#define TOUCH_Z_MIN 400
+
+extern nvMemory nvMem;
+
+OpenFontRender render;
+TFT_eSPI tft = TFT_eSPI();                  // Invoke library, pins defined in platformio.ini
+TFT_eSprite background = TFT_eSprite(&tft); // Invoke library sprite
+
+extern monitor_data mMonitor;
+extern pool_data pData;
+extern DisplayDriver *currentDisplayDriver;
+extern bool invertColors; 
+extern TSettings Settings;
+bool hasChangedScreen = true;
+
+void getChipInfo(void){
+  Serial.print("Chip: ");
+  Serial.println(ESP.getChipModel());
+  Serial.print("ChipRevision: ");
+  Serial.println(ESP.getChipRevision());
+  Serial.print("Psram size: ");
+  Serial.print(ESP.getPsramSize() / 1024);
+  Serial.println("KB");
+  Serial.print("Flash size: ");
+  Serial.print(ESP.getFlashChipSize() / 1024);
+  Serial.println("KB");
+  Serial.print("CPU frequency: ");
+  Serial.print(ESP.getCpuFreqMHz());
+  Serial.println("MHz");  
+}
+
+// Backlight duty from the settings. Values below 10 are treated as invalid: an empty "Brightness" field in the
+// WiFi portal is stored as 0 (atoi("")) and would leave the panel dark. Switching the backlight off on purpose
+// still works with a triple click on the BOOT button (alternateScreenState).
+static int backlightLevel(void)
+{
+  int b = Settings.Brightness;
+  if (b < 10 || b > 255) return DEFAULT_BRIGHTNESS;
+  return b;
+}
+
+void esp32_32e_35_Init(void)
+{ 
+  // getChipInfo();  
+  tft.init();
+  if (nvMem.loadConfig(&Settings))
+    {      
+     // Serial.print("Invert Colors: ");
+     // Serial.println(Settings.invertColors);  
+      invertColors = Settings.invertColors;           
+    }  
+  tft.invertDisplay(invertColors);
+  tft.setRotation(1);    
+  tft.setSwapBytes(true); // Swap the colour byte order when rendering
+  tft.fillScreen(TFT_BLACK);
+
+  // Configuring screen backlight brightness using ledcontrol channel 0.
+  // Using 5000Hz in 8bit resolution, which gives 0-255 possible duty cycle setting.
+  ledcSetup(0, 5000, 8);
+  ledcAttachPin(TFT_BL, 0);
+  if (backlightLevel() != Settings.Brightness)
+    Serial.printf("Brightness %d ungueltig, verwende %d\n", Settings.Brightness, backlightLevel());
+  ledcWrite(0, backlightLevel());
+ 
+  //background.createSprite(WIDTH, HEIGHT); // Background Sprite
+  //background.setSwapBytes(true);
+  //render.setDrawer(background);  // Link drawing object to background instance (so font will be rendered on background)
+  //render.setLineSpaceRatio(0.9); // Espaciado entre texto
+
+  // Load the font and check it can be read OK
+  // if (render.loadFont(NotoSans_Bold, sizeof(NotoSans_Bold)))
+  if (render.loadFont(DigitalNumbers, sizeof(DigitalNumbers)))
+  {
+    Serial.println("Initialise error");
+    return;
+  }
+  
+  pData.bestDifficulty = "0";
+  pData.workersHash = "0";
+  pData.workersCount = 0;
+  //Serial.println("=========== Fim Display ==============") ;
+}
+
+void esp32_32e_35_AlternateScreenState(void)
+{
+  Serial.println("Switching display state");
+  int screen_state_duty = ledcRead(0);
+  // Switching the duty cycle for the ledc channel, where the TFT_BL pin is attached.
+  if (screen_state_duty > 0) {
+    ledcWrite(0, 0);
+  } else {
+    ledcWrite(0, backlightLevel());
+  }
+}
+
+void esp32_32e_35_AlternateRotation(void)
+{
+  tft.setRotation( flipRotation(tft.getRotation()) );
+  hasChangedScreen = true;
+}
+
+bool bottomScreenBlue = true;
+
+void printheap(){
+  Serial.print("$$ Free Heap:");
+  Serial.println(ESP.getFreeHeap()); 
+  // Serial.printf("### stack WMark usage: %d\n", uxTaskGetStackHighWaterMark(NULL));
+}
+
+bool createBackgroundSprite(int16_t wdt, int16_t hgt){  // Set the background and link the render, used multiple times to fit in heap
+  background.createSprite(wdt, hgt) ; //Background Sprite
+  // printheap();
+  if (background.created()) {
+      background.setColorDepth(16);
+      background.setSwapBytes(true);
+      render.setDrawer(background); // Link drawing object to background instance (so font will be rendered on background)
+      render.setLineSpaceRatio(0.9);      
+  } else {
+    Serial.println("#### Sprite Error ####");
+    Serial.printf("Size w:%d h:%d \n", wdt, hgt);
+    printheap();
+  }
+  return background.created();
+}
+
+extern unsigned long mPoolUpdate;
+
+void printPoolData(){
+  if ((hasChangedScreen) || (mPoolUpdate == 0) || (millis() - mPoolUpdate > UPDATE_POOL_min * 60 * 1000)){     
+      if (Settings.PoolAddress != "tn.vkbit.com") { 
+          pData = getPoolData();             
+          background.createSprite(320,50); //Background Sprite
+          if (!background.created()) {    
+            Serial.println("###### POOL SPRITE ERROR ######");
+          // Serial.printf("Pool data W:%d H:%s D:%s\n", pData.workersCount, pData.workersHash, pData.bestDifficulty);
+            printheap();        
+          }       
+          background.setSwapBytes(true);
+          if (bottomScreenBlue) {
+            background.pushImage(0, -20, 320, 70, bottonPoolScreen);
+            tft.pushImage(0,170,320,20,bottonPoolScreen);      
+          } else {
+            background.pushImage(0, -20, 320, 70, bottonPoolScreen_g);
+            tft.pushImage(0,170,320,20,bottonPoolScreen_g);
+          }
+                
+          render.setDrawer(background); // Link drawing object to background instance (so font will be rendered on background)
+          render.setLineSpaceRatio(1);
+          
+          render.setFontSize(24);
+          render.cdrawString(String(pData.workersCount).c_str(), 157, 16, TFT_BLACK);
+          render.setFontSize(18);
+          render.setAlignment(Align::BottomRight);
+          render.cdrawString(pData.workersHash.c_str(), 265, 14, TFT_BLACK);
+          render.setAlignment(Align::BottomLeft);
+          render.cdrawString(pData.bestDifficulty.c_str(), 54, 14, TFT_BLACK);
+          background.pushSprite(0,190);      
+          background.deleteSprite();
+      } else {
+        pData.bestDifficulty = "TESTNET";
+        pData.workersHash = "TESTNET";
+        pData.workersCount = 1;
+        tft.fillRect(0,170,320,70, TFT_DARKGREEN);        
+        background.createSprite(320,40); //Background Sprite
+        background.fillSprite(TFT_DARKGREEN);
+          if (!background.created()) {    
+            Serial.println("###### POOL SPRITE ERROR ######");
+          // Serial.printf("Pool data W:%d H:%s D:%s\n", pData.workersCount, pData.workersHash, pData.bestDifficulty);
+            printheap();        
+          }
+        background.setFreeFont(FF24);
+        background.setTextDatum(TL_DATUM);
+        background.setTextSize(1);
+        background.setTextColor(TFT_WHITE, TFT_DARKGREEN);        
+        background.drawString("TESTNET", 50, 0, GFXFF);
+        background.pushSprite(0,185);  
+        mPoolUpdate = millis();
+        Serial.println("Testnet");
+        background.deleteSprite();
+      }
+  }
+}
+
+
+
+void esp32_32e_35_MinerScreen(unsigned long mElapsed)
+{
+  mining_data data = getMiningData(mElapsed);
+
+  printPoolData();
+
+  if (hasChangedScreen) tft.pushImage(0, 0, initWidth, initHeight, MinerScreen);
+    
+  hasChangedScreen = false; 
+ 
+  int wdtOffset = 190;
+  // Recreate sprite to the right side of the screen
+  createBackgroundSprite(WIDTH-5, HEIGHT-7);
+  //Print background screen    
+  background.pushImage(-190, 0, MinerWidth, MinerHeight, MinerScreen);
+  
+  // Total hashes
+  render.setFontSize(18);
+  render.rdrawString(data.totalMHashes.c_str(), 268-wdtOffset, 138, TFT_BLACK);
+
+  // Block templates
+  render.setFontSize(18);
+  render.setAlignment(Align::TopLeft);
+  render.drawString(data.templates.c_str(), 189-wdtOffset, 20, 0xDEDB);
+  // Best diff
+  render.drawString(data.bestDiff.c_str(), 189-wdtOffset, 48, 0xDEDB);
+  // 32Bit shares
+  render.setFontSize(18);
+  render.drawString(data.completedShares.c_str(), 189-wdtOffset, 76, 0xDEDB);
+  // Hores
+  render.setFontSize(14);
+  render.rdrawString(data.timeMining.c_str(), 315-wdtOffset, 104, 0xDEDB);
+
+  // Valid Blocks
+  render.setFontSize(24);
+  render.setAlignment(Align::TopCenter);
+  render.drawString(data.valids.c_str(), 290-wdtOffset, 56, 0xDEDB);
+
+  // Print Temp
+  render.setFontSize(10);
+  render.rdrawString(data.temp.c_str(), 239-wdtOffset, 1, TFT_BLACK);
+
+  render.setFontSize(4);
+  render.rdrawString(String(0).c_str(), 244-wdtOffset, 3, TFT_BLACK);
+
+  // Print Hour
+  render.setFontSize(10);
+  render.rdrawString(data.currentTime.c_str(), 286-wdtOffset, 1, TFT_BLACK);
+
+  // Push prepared background to screen
+  background.pushSprite(190, 0);
+
+  // Delete sprite to free the memory heap
+  background.deleteSprite();   
+  // printheap();
+
+   //Serial.println("=========== Mining Display ==============") ;
+  // Create background sprite to print data at once
+  createBackgroundSprite(WIDTH-7, HEIGHT-100); // initHeight); //Background Sprite
+  //Print background screen    
+  background.pushImage(0, -90, MinerWidth, MinerHeight, MinerScreen);
+
+  // Hashrate 
+  render.setFontSize(35);
+  render.setCursor(19, 118);
+  render.setFontColor(TFT_BLACK);
+  render.rdrawString(data.currentHashRate.c_str(), 118, 114-90, TFT_BLACK);
+  
+  // Push prepared background to screen
+  background.pushSprite(0, 90);
+  
+  // Delete sprite to free the memory heap
+  background.deleteSprite();  
+
+  Serial.printf(">>> Completed %s share(s), %s Khashes, avg. hashrate %s KH/s\n",
+                data.completedShares.c_str(), data.totalKHashes.c_str(), data.currentHashRate.c_str()); 
+   
+  #ifdef DEBUG_MEMORY
+    // Print heap
+    printheap();
+  #endif
+}
+
+void esp32_32e_35_ClockScreen(unsigned long mElapsed)
+{
+
+  if (hasChangedScreen) tft.pushImage(0, 0, minerClockWidth, minerClockHeight, minerClockScreen);
+  
+  printPoolData();
+
+  hasChangedScreen = false;
+
+  clock_data data = getClockData(mElapsed);
+
+ // Create background sprite to print data at once
+  createBackgroundSprite(270,36);
+
+  // Print background screen
+  background.pushImage(0, -130, minerClockWidth, minerClockHeight, minerClockScreen);
+  // Hashrate
+  render.setFontSize(25);
+  render.setFontColor(TFT_BLACK);
+  render.rdrawString(data.currentHashRate.c_str(), 95, 0, TFT_BLACK);
+
+  // Print BlockHeight
+  render.setFontSize(18);
+  render.rdrawString(data.blockHeight.c_str(), 254, 9, TFT_BLACK);
+
+  // Push prepared background to screen
+  background.pushSprite(0, 130);
+  // Delete sprite to free the memory heap
+  background.deleteSprite(); 
+
+  createBackgroundSprite(169,105);
+  // Print background screen
+  background.pushImage(-130, -3, minerClockWidth, minerClockHeight, minerClockScreen);
+  
+  // Print BTC Price
+  background.setFreeFont(FSSB9);
+  background.setTextSize(1);
+  background.setTextDatum(TL_DATUM);
+  background.setTextColor(TFT_BLACK);
+  background.drawString(data.btcPrice.c_str(), 202-130, 0, GFXFF);
+ 
+  // Print Hour
+  background.setFreeFont(FF23);
+  background.setTextSize(2);
+  background.setTextColor(0xDEDB, TFT_BLACK);
+  background.drawString(data.currentTime.c_str(), 0, 50, GFXFF);
+ 
+  // Push prepared background to screen
+  background.pushSprite(130, 3);
+
+  // Delete sprite to free the memory heap
+  background.deleteSprite();   
+
+  Serial.printf(">>> Completed %s share(s), %s Khashes, avg. hashrate %s KH/s\n",
+                data.completedShares.c_str(), data.totalKHashes.c_str(), data.currentHashRate.c_str());
+
+  #ifdef DEBUG_MEMORY
+  // Print heap
+  printheap();
+  #endif
+}
+
+void esp32_32e_35_GlobalHashScreen(unsigned long mElapsed)
+{
+  if (hasChangedScreen) tft.pushImage(0, 0, globalHashWidth, globalHashHeight, globalHashScreen);
+  
+  printPoolData();
+  
+  hasChangedScreen = false;
+  
+  coin_data data = getCoinData(mElapsed);
+
+  // Create background sprite to print data at once
+  createBackgroundSprite(169,105);
+  // Print background screen
+  background.pushImage(-160, -3, minerClockWidth, minerClockHeight, globalHashScreen);
+  
+  // Print BTC Price
+  background.setFreeFont(FSSB9);
+  background.setTextSize(1);
+  background.setTextDatum(TL_DATUM);
+  background.setTextColor(TFT_BLACK);
+  background.drawString(data.btcPrice.c_str(), 198-160, 0, GFXFF);
+  // Print Hour
+  background.setFreeFont(FSSB9);
+  background.setTextSize(1);
+  background.setTextDatum(TL_DATUM);
+  background.setTextColor(TFT_BLACK);
+  background.drawString(data.currentTime.c_str(), 268-160, 0, GFXFF);
+
+  // Print Last Pool Block
+  background.setFreeFont(FSS9);
+  background.setTextDatum(TR_DATUM);
+  background.setTextColor(0x9C92);
+  background.drawString(data.halfHourFee.c_str(), 302-160, 49, GFXFF);
+
+  // Print Difficulty
+  background.setFreeFont(FSS9);
+  background.setTextDatum(TR_DATUM);
+  background.setTextColor(0x9C92);
+  background.drawString(data.netwrokDifficulty.c_str(), 302-160, 85, GFXFF);
+  // Push prepared background to screen
+  background.pushSprite(160, 3);
+  // Delete sprite to free the memory heap
+  background.deleteSprite();   
+
+ // Create background sprite to print data at once
+  createBackgroundSprite(280,30);
+  // Print background screen
+  background.pushImage(0, -139, minerClockWidth, minerClockHeight, globalHashScreen);
+  //background.fillSprite(TFT_CYAN);
+  // Print Global Hashrate
+  render.setFontSize(17);
+  render.rdrawString(data.globalHashRate.c_str(), 274, 145-139, TFT_BLACK);
+
+  // Draw percentage rectangle
+  int x2 = 2 + (138 * data.progressPercent / 100);
+  background.fillRect(2, 149-139, x2, 168, 0xDEDB);
+
+  // Print Remaining BLocks
+  background.setTextFont(FONT2);
+  background.setTextSize(1); 
+  background.setTextDatum(MC_DATUM);
+  background.setTextColor(TFT_BLACK);
+  background.drawString(data.remainingBlocks.c_str(), 72, 159-139, FONT2);
+
+  // Push prepared background to screen
+  background.pushSprite(0, 139);
+  // Delete sprite to free the memory heap
+  background.deleteSprite();   
+
+ // Create background sprite to print data at once
+  createBackgroundSprite(140,40);
+  // Print background screen
+  background.pushImage(-5, -100, minerClockWidth, minerClockHeight, globalHashScreen);
+  //background.fillSprite(TFT_CYAN);
+  // Print BlockHeight
+  render.setFontSize(28);
+  render.rdrawString(data.blockHeight.c_str(), 140-5, 104-100, 0xDEDB);
+
+  // Push prepared background to screen
+  background.pushSprite(5, 100);
+  // Delete sprite to free the memory heap
+  background.deleteSprite();   
+
+  Serial.printf(">>> Completed %s share(s), %s Khashes, avg. hashrate %s KH/s\n",
+                data.completedShares.c_str(), data.totalKHashes.c_str(), data.currentHashRate.c_str());
+
+  #ifdef DEBUG_MEMORY
+  // Print heap
+  printheap();
+  #endif
+}
+void esp32_32e_35_BTCprice(unsigned long mElapsed)
+{
+  
+  if (hasChangedScreen) tft.pushImage(0, 0, priceScreenWidth, priceScreenHeight, priceScreen);
+  printPoolData();
+  hasChangedScreen = false;
+
+  clock_data data = getClockData(mElapsed);
+
+ // Create background sprite to print data at once
+  createBackgroundSprite(270,36);
+
+  // Print background screen
+  background.pushImage(0, -130, priceScreenWidth, priceScreenHeight, priceScreen);
+  // Hashrate
+  render.setFontSize(25);
+  render.setFontColor(TFT_BLACK);
+  render.rdrawString(data.currentHashRate.c_str(), 95, 0, TFT_BLACK);
+
+  // Print BlockHeight
+  render.setFontSize(18);
+  render.rdrawString(data.blockHeight.c_str(), 254, 9, TFT_WHITE);
+
+  // Push prepared background to screen
+  background.pushSprite(0, 130);
+  // Delete sprite to free the memory heap
+  background.deleteSprite(); 
+
+  createBackgroundSprite(180,105);
+  // Print background screen
+  background.pushImage(-130, -3, priceScreenWidth, priceScreenHeight, priceScreen);
+  
+  // Print Hour
+  background.setFreeFont(FSSB9);
+  background.setTextSize(1);
+  background.setTextDatum(TL_DATUM);
+  background.setTextColor(TFT_BLACK);
+  background.drawString(data.currentTime.c_str(), 202-130, 0, GFXFF);
+ 
+  // Print BTC Price
+  background.setFreeFont(FF24);
+  background.setTextDatum(TL_DATUM);
+  background.setTextSize(1);
+  background.setTextColor(0xDEDB, TFT_BLACK);
+  background.drawString(data.btcPrice.c_str(), 0, 50, GFXFF);
+ 
+  // Push prepared background to screen
+  background.pushSprite(130, 3);
+
+  // Delete sprite to free the memory heap
+  background.deleteSprite();   
+
+  Serial.printf(">>> Completed %s share(s), %s Khashes, avg. hashrate %s KH/s\n",
+                data.completedShares.c_str(), data.totalKHashes.c_str(), data.currentHashRate.c_str());
+
+  #ifdef DEBUG_MEMORY
+  // Print heap
+  printheap();
+  #endif
+}
+
+void esp32_32e_35_LoadingScreen(void)
+{
+  tft.resetViewport();
+  tft.fillScreen(TFT_BLACK);
+  tft.setViewport(LEGACY_X, LEGACY_Y, LEGACY_W, LEGACY_H);
+  tft.pushImage(0, 33, initWidth, initHeight, initScreen);
+  tft.setTextColor(TFT_BLACK);
+  tft.drawString(CURRENT_VERSION, 24, 147, FONT2);
+  tft.resetViewport();
+  // delay(2000);
+  // tft.fillScreen(TFT_BLACK);
+  // tft.pushImage(0, 0, initWidth, initHeight, MinerScreen);
+}
+
+void esp32_32e_35_SetupScreen(void)
+{
+  tft.resetViewport();
+  tft.fillScreen(TFT_BLACK);
+  tft.setViewport(LEGACY_X, LEGACY_Y, LEGACY_W, LEGACY_H);
+  tft.pushImage(0, 33, setupModeWidth, setupModeHeight, setupModeScreen);
+  tft.resetViewport();
+}
+
+void esp32_32e_35_AnimateCurrentScreen(unsigned long frame)
+{
+}
+
+// Wraps a classic 320x240 screen: clear the full panel on screen change, then draw centred.
+static void runLegacyScreen(CyclicScreenFunction fn, unsigned long mElapsed)
+{
+  if (hasChangedScreen) {
+    tft.resetViewport();
+    tft.fillScreen(TFT_BLACK);
+  }
+  tft.setViewport(LEGACY_X, LEGACY_Y, LEGACY_W, LEGACY_H);
+  fn(mElapsed);
+  tft.resetViewport();
+}
+
+static void legacyMinerScreen(unsigned long mElapsed) { runLegacyScreen(esp32_32e_35_MinerScreen, mElapsed); }
+static void legacyClockScreen(unsigned long mElapsed) { runLegacyScreen(esp32_32e_35_ClockScreen, mElapsed); }
+static void legacyGlobalHashScreen(unsigned long mElapsed) { runLegacyScreen(esp32_32e_35_GlobalHashScreen, mElapsed); }
+static void legacyBTCpriceScreen(unsigned long mElapsed) { runLegacyScreen(esp32_32e_35_BTCprice, mElapsed); }
+
+void esp32_32e_35_ClaudeScreen(unsigned long mElapsed)
+{
+  // Same call as the miner screen, so the hashrate average keeps being updated once per second.
+  mining_data data = getMiningData(mElapsed);
+  tft.resetViewport();
+  claudeDrawScreen(tft, hasChangedScreen, data.currentHashRate.c_str(), data.bestDiff.c_str(), data.temp.c_str());
+  hasChangedScreen = false;
+  #ifdef DEBUG_MEMORY
+  printheap();
+  #endif
+}
+
+CyclicScreenFunction esp32_32e_35CyclicScreens[] = {legacyMinerScreen, legacyClockScreen, legacyGlobalHashScreen, legacyBTCpriceScreen, esp32_32e_35_ClaudeScreen};
+#define CLAUDE_SCREEN_INDEX (SCREENS_ARRAY_SIZE(esp32_32e_35CyclicScreens) - 1)
+
+static unsigned long previousTouchMillis = 0;
+static unsigned long lastRotateMillis = 0;
+static bool touchWasDown = false;
+static int currentScreen = -1;
+
+void esp32_32e_35_DoLedStuff(unsigned long frame)
+{
+  unsigned long currentMillis = millis();
+
+#ifdef TOUCH_CS
+  // Touch: any tap switches to the next screen (one switch per tap).
+  if (currentMillis - previousTouchMillis >= 100)
+  {
+    previousTouchMillis = currentMillis;
+    bool down = tft.getTouchRawZ() > TOUCH_Z_MIN;
+    if (down && !touchWasDown)
+    {
+      currentDisplayDriver->current_cyclic_screen = (currentDisplayDriver->current_cyclic_screen + 1) % currentDisplayDriver->num_cyclic_screens;
+      lastRotateMillis = currentMillis;
+    }
+    touchWasDown = down;
+  }
+#endif
+
+  // Optional auto rotation between miner screen and Claude screen (0 = off).
+  if (Settings.ClaudeRotate > 0 && mMonitor.NerdStatus == NM_hashing &&
+      currentMillis - lastRotateMillis >= (unsigned long)Settings.ClaudeRotate * 1000UL)
+  {
+    lastRotateMillis = currentMillis;
+    currentDisplayDriver->current_cyclic_screen =
+        (currentDisplayDriver->current_cyclic_screen == (int)CLAUDE_SCREEN_INDEX) ? 0 : (int)CLAUDE_SCREEN_INDEX;
+  }
+
+  if (currentScreen != currentDisplayDriver->current_cyclic_screen)
+  {
+    // Manual switch (touch or button) also restarts the rotation timer.
+    if (currentScreen >= 0) lastRotateMillis = currentMillis;
+    hasChangedScreen = true;
+    currentScreen = currentDisplayDriver->current_cyclic_screen;
+  }
+}
+
+DisplayDriver esp32_32e_35Driver = {
+    esp32_32e_35_Init,
+    esp32_32e_35_AlternateScreenState,
+    esp32_32e_35_AlternateRotation,
+    esp32_32e_35_LoadingScreen,
+    esp32_32e_35_SetupScreen,
+    esp32_32e_35CyclicScreens,
+    esp32_32e_35_AnimateCurrentScreen,
+    esp32_32e_35_DoLedStuff,
+    SCREENS_ARRAY_SIZE(esp32_32e_35CyclicScreens),
+    0,
+    WIDTH,
+    HEIGHT};
+#endif
