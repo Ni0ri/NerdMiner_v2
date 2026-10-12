@@ -56,7 +56,8 @@ Describe 'Auswertung Admin API' {
         $b = Invoke-AnthropicReport -Path 'cost_report' -Query @{ starting_at = '2026-10-01T00:00:00Z'; bucket_width = '1d' } -ApiKey 'k'
         $b.Count | Should -Be 2
         $script:calls.Count | Should -Be 2
-        $script:calls[0] | Should -Match '^https://api\.anthropic\.com/v1/organizations/cost_report\?bucket_width=1d&starting_at=2026-10-01T00%3A00%3A00Z$'
+        # Windows PowerShell 5.1 gibt [Uri] unescaped aus (":" statt "%3A"), daher unescaped vergleichen
+        [uri]::UnescapeDataString([string]$script:calls[0]) | Should -Be 'https://api.anthropic.com/v1/organizations/cost_report?bucket_width=1d&starting_at=2026-10-01T00:00:00Z'
         $script:calls[1] | Should -Match 'page=p2$'
         Should -Invoke Invoke-RestMethod -Times 2 -ParameterFilter { $Headers['x-api-key'] -eq 'k' -and $Headers['anthropic-version'] -eq '2023-06-01' }
     }
